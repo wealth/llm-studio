@@ -71,6 +71,8 @@ namespace LLMStudio {
 
         /* Tracks whether we are currently inside a reasoning_content block. */
         private bool _in_reasoning = false;
+        /* Tracks whether reasoning_content was used at all during this stream. */
+        private bool _had_reasoning = false;
 
         public signal void status_changed (BackendStatus status);
         public signal void log_message    (string line, bool is_error);
@@ -184,6 +186,7 @@ namespace LLMStudio {
             GLib.Cancellable?    cancel = null
         ) throws Error {
             _in_reasoning = false;
+            _had_reasoning = false;
             var ds = new GLib.DataInputStream (istream);
             string? line;
             while ((line = yield ds.read_line_async (GLib.Priority.DEFAULT, cancel)) != null) {
@@ -227,6 +230,7 @@ namespace LLMStudio {
                                 if (!_in_reasoning) {
                                     callback ("<think>", false, null);
                                     _in_reasoning = true;
+                                    _had_reasoning = true;
                                 }
                                 callback (rc, false, null);
                             }
@@ -239,9 +243,17 @@ namespace LLMStudio {
                                 callback ("</think>", false, null);
                                 _in_reasoning = false;
                             }
-                            if (content != null && content.length > 0)
-                                callback (content, finish_reason != null, finish_reason);
-                            else if (finish_reason != null)
+                            if (content != null && content.length > 0) {
+                                /* Strip <think>/<​/think> tags from content if reasoning_content
+                                   was used — llama-cpp may echo them in both fields. */
+                                if (_had_reasoning) {
+                                    content = content.replace ("<think>", "").replace ("</think>", "");
+                                }
+                                if (content.length > 0)
+                                    callback (content, finish_reason != null, finish_reason);
+                                else if (finish_reason != null)
+                                    callback ("", true, finish_reason);
+                            } else if (finish_reason != null)
                                 callback ("", true, finish_reason);
                         }
                     }
