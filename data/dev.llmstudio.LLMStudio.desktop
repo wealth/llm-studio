@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=LLM Studio
+Comment=Run and chat with local large language models
+Exec=llm-studio
+Icon=dev.llmstudio.LLMStudio
+Terminal=false
+Type=Application
+Categories=Development;Science;
+Keywords=AI;LLM;Language Model;Chat;llama;vllm;
+StartupWMClass=llm-studio

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="dev.llmstudio.LLMStudio" path="/dev/llmstudio/LLMStudio/">
+
+    <!-- Window state -->
+    <key name="window-width" type="i">
+      <default>1200</default>
+      <summary>Window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <default>800</default>
+      <summary>Window height</summary>
+    </key>
+    <key name="window-maximized" type="b">
+      <default>false</default>
+      <summary>Window maximized state</summary>
+    </key>
+
+    <!-- Models -->
+    <key name="models-directory" type="s">
+      <default>''</default>
+      <summary>Directory to scan for local models</summary>
+    </key>
+    <key name="last-model-path" type="s">
+      <default>''</default>
+      <summary>Last loaded model path</summary>
+    </key>
+
+    <!-- HuggingFace -->
+    <key name="hf-token" type="s">
+      <default>''</default>
+      <summary>HuggingFace API token</summary>
+    </key>
+    <key name="hf-cache-dir" type="s">
+      <default>''</default>
+      <summary>HuggingFace model cache directory</summary>
+    </key>
+
+    <!-- Backend -->
+    <key name="backend-type" type="s">
+      <default>'llama'</default>
+      <summary>Active backend type: llama, ik-llama, vllm</summary>
+    </key>
+    <key name="llama-server-path" type="s">
+      <default>'llama-server'</default>
+      <summary>Path to llama-server executable</summary>
+    </key>
+    <key name="ik-llama-server-path" type="s">
+      <default>'llama-server'</default>
+      <summary>Path to ik_llama server executable</summary>
+    </key>
+    <key name="vllm-host" type="s">
+      <default>'http://localhost:8000'</default>
+      <summary>vllm server host URL</summary>
+    </key>
+    <key name="vllm-managed" type="b">
+      <default>false</default>
+      <summary>Whether to manage the vllm process</summary>
+    </key>
+
+    <!-- Engine management -->
+    <key name="engines-directory" type="s">
+      <default>''</default>
+      <summary>Directory where inference engine binaries are stored</summary>
+    </key>
+    <key name="engine-skip-version" type="s">
+      <default>''</default>
+      <summary>Engine release tag the user chose to skip</summary>
+    </key>
+
+    <!-- API Server -->
+    <key name="api-server-enabled" type="b">
+      <default>false</default>
+      <summary>Whether the API server is enabled</summary>
+    </key>
+    <key name="api-server-host" type="s">
+      <default>'127.0.0.1'</default>
+      <summary>API server bind address</summary>
+    </key>
+    <key name="api-server-port" type="i">
+      <default>1234</default>
+      <summary>API server port</summary>
+    </key>
+    <key name="api-server-cors" type="b">
+      <default>true</default>
+      <summary>Enable CORS headers on API server</summary>
+    </key>
+
+  </schema>
+</schemalist>
