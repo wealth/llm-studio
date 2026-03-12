@@ -210,6 +210,7 @@ body{padding:0}
 details.think{background:var(--think-bg);border:1px solid var(--border);
   border-radius:8px;padding:2px 10px;margin-bottom:10px;
   font-size:13px;color:var(--dim)}
+details.think .katex,.details.think .katex-display{color:var(--fg)}
 details.think summary{cursor:pointer;padding:4px 0;font-style:italic}
 details.think[open] summary{margin-bottom:4px}
 .asst-content h1,.asst-content h2,.asst-content h3,
@@ -256,7 +257,11 @@ var KATEX_OPTS={
   ],
   throwOnError:false,output:"html"
 };
-function katexEl(el){if(typeof renderMathInElement!=='undefined')renderMathInElement(el,KATEX_OPTS);}
+function katexEl(el){
+  if(typeof renderMathInElement!=='undefined'){
+    try{renderMathInElement(el,KATEX_OPTS);}catch(e){console.error(e);}
+  }
+}
 function llmRenderAll(){katexEl(document.body);}
 function scrollBottom(){window.scrollTo(0,document.body.scrollHeight);}
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -325,7 +330,8 @@ function wrapInlineMath(s){
   return s.replace(/\x01(\d+)\x01/g,function(_,i){return sv[+i];});
 }
 function renderThinkText(raw){
-  /* Auto-detect inline math, then HTML-escape and convert newlines. */
+  /* Render think content as markdown-like HTML (with KaTeX support) */
+  if(!raw)return'';
   var s=wrapInlineMath(raw);
   s=s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   return s.split(/\n{2,}/).map(function(p){
