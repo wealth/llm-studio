@@ -1,12 +1,5 @@
 namespace LLMStudio {
 
-    // Thin wrapper used as items in the header model-picker ListStore.
-    // model == null means the placeholder "— Select model —" entry.
-    private class ModelPickerItem : Object {
-        public ModelInfo? model { get; construct; }
-        public ModelPickerItem (ModelInfo? m) { Object (model: m); }
-    }
-
     public class Window : Adw.ApplicationWindow {
         private GLib.Settings  settings;
         private ModelManager   model_manager;
@@ -27,11 +20,10 @@ namespace LLMStudio {
         private Adw.ToastOverlay     toast_overlay;
         private GLib.Cancellable?    load_cancel;
 
-        // Header model selector
-        private GLib.ListStore  dropdown_store;
-        private Gtk.DropDown    model_dropdown;
+        // Header model button
+        private Gtk.Button      model_btn;
+        private Gtk.Label       model_btn_lbl;
         private Gtk.Button      eject_btn;
-        private bool            model_list_updating = false;
         private UI.ChatParamsPanel  params_panel;
         private Gtk.Paned           main_paned;
         private Gtk.ToggleButton    params_toggle_btn;
@@ -132,146 +124,24 @@ namespace LLMStudio {
             sidebar_btn.add_css_class ("flat");
             content_header.pack_start (sidebar_btn);
 
-            // Model selector (title widget — visible on all tabs)
-            dropdown_store = new GLib.ListStore (typeof (ModelPickerItem));
-            dropdown_store.append (new ModelPickerItem (null));  // placeholder
+            // Model selector button (title widget)
+            model_btn_lbl = new Gtk.Label ("Load Model");
+            model_btn_lbl.ellipsize = Pango.EllipsizeMode.END;
 
-            // Factory for the button (compact: name only)
-            var btn_factory = new Gtk.SignalListItemFactory ();
-            btn_factory.setup.connect (item => {
-                var li  = (Gtk.ListItem) item;
-                var lbl = new Gtk.Label ("");
-                lbl.halign = Gtk.Align.START;
-                lbl.ellipsize = Pango.EllipsizeMode.END;
-                li.set_child (lbl);
-            });
-            btn_factory.bind.connect (item => {
-                var li    = (Gtk.ListItem) item;
-                var lbl   = (Gtk.Label) li.get_child ();
-                var entry = (ModelPickerItem) li.get_item ();
-                if (entry.model == null) {
-                    lbl.label = "— Select model —";
-                } else {
-                    var pub = entry.model.publisher ();
-                    var n   = entry.model.clean_name ().down ();
-                    lbl.label = pub != "" ? pub + "/" + n : n;
-                }
-            });
+            var arrow_icon = new Gtk.Image.from_icon_name ("pan-down-symbolic");
+            arrow_icon.add_css_class ("dim-label");
+            arrow_icon.pixel_size = 12;
 
-            // Factory for the popup list (rich: name + quant + params + size)
-            var list_factory = new Gtk.SignalListItemFactory ();
-            list_factory.setup.connect (item => {
-                var li  = (Gtk.ListItem) item;
-                var row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
-                row.margin_start  = 4;
-                row.margin_end    = 4;
-                row.margin_top    = 4;
-                row.margin_bottom = 4;
+            var btn_inner = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
+            btn_inner.valign = Gtk.Align.CENTER;
+            btn_inner.append (model_btn_lbl);
+            btn_inner.append (arrow_icon);
 
-                var name_lbl  = new Gtk.Label ("");
-                name_lbl.halign   = Gtk.Align.START;
-                name_lbl.hexpand  = true;
-                name_lbl.ellipsize = Pango.EllipsizeMode.END;
-                name_lbl.set_data ("role", "name");
-
-                var quant_lbl = new Gtk.Label ("");
-                quant_lbl.add_css_class ("badge");
-                quant_lbl.add_css_class ("quant");
-                quant_lbl.valign = Gtk.Align.CENTER;
-                quant_lbl.set_data ("role", "quant");
-
-                var params_lbl = new Gtk.Label ("");
-                params_lbl.add_css_class ("caption");
-                params_lbl.add_css_class ("dim-label");
-                params_lbl.width_chars = 5;
-                params_lbl.halign      = Gtk.Align.END;
-                params_lbl.set_data ("role", "params");
-
-                var size_lbl = new Gtk.Label ("");
-                size_lbl.add_css_class ("caption");
-                size_lbl.add_css_class ("dim-label");
-                size_lbl.add_css_class ("monospace");
-                size_lbl.width_chars = 8;
-                size_lbl.halign      = Gtk.Align.END;
-                size_lbl.set_data ("role", "size");
-
-                var vision_tag = new Gtk.Label ("Vision");
-                vision_tag.add_css_class ("badge");
-                vision_tag.add_css_class ("badge-vision");
-                vision_tag.valign  = Gtk.Align.CENTER;
-                vision_tag.visible = false;
-                vision_tag.set_data ("role", "vision");
-
-                var tools_tag = new Gtk.Label ("Tools");
-                tools_tag.add_css_class ("badge");
-                tools_tag.add_css_class ("badge-tools");
-                tools_tag.valign  = Gtk.Align.CENTER;
-                tools_tag.visible = false;
-                tools_tag.set_data ("role", "tools");
-
-                row.append (name_lbl);
-                row.append (vision_tag);
-                row.append (tools_tag);
-                row.append (quant_lbl);
-                row.append (params_lbl);
-                row.append (size_lbl);
-                li.set_child (row);
-            });
-            list_factory.bind.connect (item => {
-                var li    = (Gtk.ListItem) item;
-                var row   = (Gtk.Box) li.get_child ();
-                var entry = (ModelPickerItem) li.get_item ();
-
-                Gtk.Label? name_lbl   = null;
-                Gtk.Label? quant_lbl  = null;
-                Gtk.Label? params_lbl = null;
-                Gtk.Label? size_lbl   = null;
-                Gtk.Label? vision_tag = null;
-                Gtk.Label? tools_tag  = null;
-
-                var child = row.get_first_child ();
-                while (child != null) {
-                    if (child is Gtk.Label) {
-                        var r = ((Gtk.Label) child).get_data<string> ("role");
-                        if (r == "name")   name_lbl   = (Gtk.Label) child;
-                        if (r == "quant")  quant_lbl  = (Gtk.Label) child;
-                        if (r == "params") params_lbl = (Gtk.Label) child;
-                        if (r == "size")   size_lbl   = (Gtk.Label) child;
-                        if (r == "vision") vision_tag = (Gtk.Label) child;
-                        if (r == "tools")  tools_tag  = (Gtk.Label) child;
-                    }
-                    child = child.get_next_sibling ();
-                }
-
-                if (entry.model == null) {
-                    if (name_lbl   != null) name_lbl.label     = "— Select model —";
-                    if (quant_lbl  != null) quant_lbl.visible  = false;
-                    if (params_lbl != null) params_lbl.label   = "";
-                    if (size_lbl   != null) size_lbl.label     = "";
-                    if (vision_tag != null) vision_tag.visible = false;
-                    if (tools_tag  != null) tools_tag.visible  = false;
-                } else {
-                    var m = entry.model;
-                    if (name_lbl   != null) name_lbl.label   = m.clean_name ().down ();
-                    if (quant_lbl  != null) {
-                        var q = m.quant_tag ();
-                        quant_lbl.label   = q;
-                        quant_lbl.visible = q != "";
-                    }
-                    if (params_lbl != null) params_lbl.label   = m.format_params ();
-                    if (size_lbl   != null) size_lbl.label     = m.format_size ();
-                    if (vision_tag != null) vision_tag.visible = m.has_vision;
-                    if (tools_tag  != null) tools_tag.visible  = m.has_tools;
-                }
-            });
-
-            model_dropdown = new Gtk.DropDown (dropdown_store, null);
-            model_dropdown.factory      = btn_factory;
-            model_dropdown.list_factory = list_factory;
-            model_dropdown.add_css_class ("model-selector");
-            model_dropdown.show_arrow    = true;
-            model_dropdown.width_request = 460;
-            model_dropdown.notify["selected"].connect (on_model_selected);
+            model_btn = new Gtk.Button ();
+            model_btn.set_child (btn_inner);
+            model_btn.add_css_class ("model-selector");
+            model_btn.width_request = 360;
+            model_btn.clicked.connect (on_model_btn_clicked);
 
             eject_btn = new Gtk.Button.from_icon_name ("media-eject-symbolic");
             eject_btn.tooltip_text = "Unload model";
@@ -281,7 +151,7 @@ namespace LLMStudio {
 
             var title_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 4);
             title_box.valign = Gtk.Align.CENTER;
-            title_box.append (model_dropdown);
+            title_box.append (model_btn);
             title_box.append (eject_btn);
             content_header.set_title_widget (title_box);
 
@@ -371,41 +241,38 @@ namespace LLMStudio {
             split_view.show_sidebar = true;
             sidebar_btn.active      = true;
 
-            model_manager.models.items_changed.connect ((pos, removed, added) => {
-                update_header_model_list ();
-            });
-
             backend_manager.status_changed.connect (s => {
-                if (s == BackendStatus.LOADING) {
-                    model_dropdown.add_css_class ("loading");
+                bool busy = (s == BackendStatus.LOADING || s == BackendStatus.UNLOADING);
+                model_btn.sensitive = !busy;
+                if (busy) {
+                    model_btn.add_css_class ("loading");
                 } else {
-                    model_dropdown.remove_css_class ("loading");
+                    model_btn.remove_css_class ("loading");
                 }
                 eject_btn.sensitive = (s == BackendStatus.READY);
             });
 
             backend_manager.model_loaded.connect (m => {
-                model_list_updating = true;
-                for (uint i = 0; i < dropdown_store.get_n_items (); i++) {
-                    var entry = (ModelPickerItem) dropdown_store.get_item (i);
-                    if (entry.model != null && entry.model.path == m.path) {
-                        model_dropdown.selected = i;
-                        break;
-                    }
-                }
-                model_list_updating = false;
-                model_dropdown.add_css_class ("model-loaded");
+                var pub = m.publisher ();
+                model_btn_lbl.label = pub != "" ? pub + "/" + m.clean_name ().down ()
+                                                : m.clean_name ().down ();
+                model_btn.add_css_class ("model-loaded");
+                eject_btn.sensitive = true;
             });
 
             backend_manager.model_unloaded.connect (() => {
-                model_list_updating = true;
-                model_dropdown.selected = 0;
-                model_list_updating = false;
+                model_btn_lbl.label = "Load Model";
+                model_btn.remove_css_class ("model-loaded");
                 eject_btn.sensitive = false;
-                model_dropdown.remove_css_class ("model-loaded");
             });
 
             close_request.connect (on_close_request);
+
+            // On startup the sidebar already has the first session selected (visual-only),
+            // but the session_selected signal fired during construction before our handler
+            // was connected. Load the session explicitly here.
+            if (chat_history.current != null)
+                chat_view.load_session (chat_history.current);
         }
 
         private void restore_state () {
@@ -460,24 +327,14 @@ namespace LLMStudio {
         private void on_load_confirmed (ModelInfo model, ModelParams params) {
             load_cancel?.cancel ();
             load_cancel = new GLib.Cancellable ();
-
-            var toast = new Adw.Toast ("Loading %s…".printf (model.name));
-            toast.timeout = 0;
-            toast_overlay.add_toast (toast);
-
-            do_load_model.begin (model, params, toast);
+            do_load_model.begin (model, params);
         }
 
-        private async void do_load_model (ModelInfo model, ModelParams params, Adw.Toast loading_toast) {
+        private async void do_load_model (ModelInfo model, ModelParams params) {
             try {
                 yield backend_manager.load_model (model, params, load_cancel);
-                loading_toast.dismiss ();
-                var ok_toast = new Adw.Toast ("%s loaded".printf (model.name));
-                ok_toast.timeout = 3;
-                toast_overlay.add_toast (ok_toast);
                 navigate_to (UI.SidebarPage.CHAT);
             } catch (Error e) {
-                loading_toast.dismiss ();
                 if (!(e is IOError.CANCELLED))
                     show_error_dialog ("Failed to load model", e.message);
             }
@@ -496,46 +353,10 @@ namespace LLMStudio {
             toast_overlay.add_toast (toast);
         }
 
-        private void update_header_model_list () {
-            model_list_updating = true;
-            dropdown_store.remove_all ();
-            dropdown_store.append (new ModelPickerItem (null));  // placeholder
-            for (uint i = 0; i < model_manager.models.get_n_items (); i++) {
-                var m = (ModelInfo) model_manager.models.get_item (i);
-                dropdown_store.append (new ModelPickerItem (m));
-            }
-            // Restore selection if a model is currently loaded
-            uint new_sel = 0;
-            if (backend_manager.loaded_model != null) {
-                for (uint i = 0; i < model_manager.models.get_n_items (); i++) {
-                    var m = (ModelInfo) model_manager.models.get_item (i);
-                    if (m.path == backend_manager.loaded_model.path) {
-                        new_sel = i + 1;
-                        break;
-                    }
-                }
-            }
-            model_dropdown.selected = new_sel;
-            model_list_updating = false;
-        }
-
-        private void on_model_selected () {
-            if (model_list_updating) return;
-            uint idx = model_dropdown.selected;
-            if (idx == 0 || idx == uint.MAX) return;
-            var entry = (ModelPickerItem) dropdown_store.get_item (idx);
-            if (entry == null || entry.model == null) return;
-            var model = entry.model;
-
-            // Reset dropdown to placeholder immediately
-            model_list_updating = true;
-            model_dropdown.selected = 0;
-            model_list_updating = false;
-
-            // Skip if already loaded
-            if (backend_manager.loaded_model?.path == model.path) return;
-
-            on_load_model_requested (model);
+        private void on_model_btn_clicked () {
+            var dialog = new UI.ModelPickerDialog (model_manager, backend_manager, this);
+            dialog.load_requested.connect (on_load_confirmed);
+            dialog.present ();
         }
     }
 }

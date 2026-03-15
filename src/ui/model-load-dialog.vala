@@ -15,7 +15,6 @@ namespace LLMStudio.UI {
         private Adw.SwitchRow flash_attn_row;
         private Adw.SwitchRow mmap_row;
         private Adw.SwitchRow mlock_row;
-        private Adw.SwitchRow vision_row;
 
         // KV / RoPE group
         private Adw.ComboRow kv_type_row;
@@ -149,16 +148,11 @@ namespace LLMStudio.UI {
                 params.mmap);
             mlock_row = make_switch_row ("Memory Lock", "Lock model weights in RAM (prevents swapping)",
                 params.mlock);
-            vision_row = make_switch_row ("Enable Vision",
-                "Load mmproj sidecar for image input (uses extra VRAM; disable for text-only use)",
-                params.enable_vision);
             hw_group.add (gpu_layers_row);
             hw_group.add (threads_row);
             hw_group.add (flash_attn_row);
             hw_group.add (mmap_row);
             hw_group.add (mlock_row);
-            if (model.has_vision)
-                hw_group.add (vision_row);
 
             // ---- KV cache / RoPE group ----
             var kv_group = new Adw.PreferencesGroup ();
@@ -298,6 +292,7 @@ namespace LLMStudio.UI {
             params.flash_attention   = flash_attn_row.active;
             params.mmap              = mmap_row.active;
             params.mlock             = mlock_row.active;
+            params.enable_vision     = model.has_vision;
 
             switch (kv_type_row.selected) {
                 case 1:  params.kv_cache_type = "q8_0"; break;
@@ -318,8 +313,6 @@ namespace LLMStudio.UI {
             params.max_tokens        = (int) max_tokens_row.get_value ();
             params.seed              = (int) seed_row.get_value ();
             params.system_prompt     = system_prompt_view.buffer.text;
-            if (model.has_vision)
-                params.enable_vision = vision_row.active;
 
             model.params = params;
             model.save_params ();

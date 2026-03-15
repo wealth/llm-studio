@@ -288,6 +288,14 @@ namespace LLMStudio {
             }
             builder.set_member_name ("enable_thinking");
             builder.add_boolean_value (params.enable_thinking);
+            /* For llama.cpp: pass enable_thinking as a Jinja2 template variable.
+               This is the mechanism used by Qwen3/similar chat templates to insert
+               or suppress the <|im_start|>think token before the assistant turn. */
+            builder.set_member_name ("chat_template_kwargs");
+            builder.begin_object ();
+            builder.set_member_name ("enable_thinking");
+            builder.add_boolean_value (params.enable_thinking);
+            builder.end_object ();
             builder.end_object ();
             return builder.get_root ();
         }

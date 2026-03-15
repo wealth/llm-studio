@@ -36,6 +36,7 @@ sources = files(
   'ui/chat-params-panel.vala',
   'ui/model-browser.vala',
   'ui/model-load-dialog.vala',
+  'ui/model-picker-dialog.vala',
   'ui/server-panel.vala',
   'ui/preferences-dialog.vala',
   'ui/download-view.vala',

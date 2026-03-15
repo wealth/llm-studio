@@ -25,6 +25,12 @@ namespace LLMStudio.UI {
         private Gtk.Box           pending_atts_bar;
         private GLib.Cancellable? current_request;
 
+        /* Input toolbar indicators */
+        private Gtk.ToggleButton  thinking_btn;
+        private Gtk.Label         vision_tag;
+        private Gtk.Label         ctx_lbl;
+        private bool              thinking_guard = false;
+
         /* Pending attachments to send with the next message */
         private GLib.List<ChatAttachment> pending_attachments;
 
@@ -78,6 +84,48 @@ namespace LLMStudio.UI {
             hint_lbl.halign  = Gtk.Align.START;
             hint_lbl.hexpand = true;
             input_toolbar.append (hint_lbl);
+
+            /* ── Thinking toggle ───────────────────────────────────── */
+            thinking_btn = new Gtk.ToggleButton ();
+            thinking_btn.label         = "Thinking";
+            thinking_btn.tooltip_text  = "Enable extended thinking (sends /think prefix)";
+            thinking_btn.add_css_class ("thinking-toggle");
+            thinking_btn.visible = false;
+            thinking_btn.toggled.connect (() => {
+                if (thinking_guard) return;
+                if (backend_manager.loaded_model != null) {
+                    backend_manager.loaded_model.params.enable_thinking = thinking_btn.active;
+                    backend_manager.loaded_model.save_params ();
+                }
+            });
+            input_toolbar.append (thinking_btn);
+
+            /* ── Vision tag (unclickable) ──────────────────────────── */
+            vision_tag = new Gtk.Label ("Vision");
+            vision_tag.add_css_class ("input-tag");
+            vision_tag.add_css_class ("input-tag-vision");
+            vision_tag.tooltip_text = "Vision is enabled for this model";
+            vision_tag.visible = false;
+            input_toolbar.append (vision_tag);
+
+            /* ── Context counter ───────────────────────────────────── */
+            ctx_lbl = new Gtk.Label ("");
+            ctx_lbl.add_css_class ("caption");
+            ctx_lbl.add_css_class ("dim-label");
+            ctx_lbl.add_css_class ("monospace");
+            ctx_lbl.tooltip_text = "Estimated context usage";
+            ctx_lbl.visible = false;
+            input_toolbar.append (ctx_lbl);
+
+            /* ── Copy HTML ─────────────────────────────────────────── */
+            var copy_html_btn = new Gtk.Button.from_icon_name ("edit-copy-symbolic");
+            copy_html_btn.add_css_class ("flat");
+            copy_html_btn.tooltip_text = "Copy chat as HTML";
+            copy_html_btn.clicked.connect (() => {
+                run_js ("llmCopyChat();");
+                show_toast ("Chat copied to clipboard");
+            });
+            input_toolbar.append (copy_html_btn);
 
             attach_btn = new Gtk.Button.from_icon_name ("mail-attachment-symbolic");
             attach_btn.add_css_class ("flat");
@@ -137,10 +185,10 @@ namespace LLMStudio.UI {
             send_btn.clicked.connect (on_send_clicked);
 
             stop_btn = new Gtk.Button.from_icon_name ("media-playback-stop-symbolic");
-            stop_btn.add_css_class ("destructive-action");
-            stop_btn.add_css_class ("circular");
-            stop_btn.visible      = false;
-            stop_btn.tooltip_text = "Stop generation";
+            stop_btn.visible       = false;
+            stop_btn.vexpand       = true;
+            stop_btn.width_request = 44;
+            stop_btn.tooltip_text  = "Stop generation";
             stop_btn.clicked.connect (on_stop_clicked);
 
             btn_box.append (send_btn);
@@ -158,8 +206,16 @@ namespace LLMStudio.UI {
 
         private void connect_signals () {
             backend_manager.status_changed.connect (on_backend_status_changed);
-            backend_manager.model_loaded.connect   (_ => update_attach_btn_visibility ());
-            backend_manager.model_unloaded.connect (update_attach_btn_visibility);
+            backend_manager.model_loaded.connect (_ => {
+                update_attach_btn_visibility ();
+                update_input_indicators ();
+            });
+            backend_manager.model_unloaded.connect (() => {
+                update_attach_btn_visibility ();
+                thinking_btn.visible = false;
+                vision_tag.visible   = false;
+                ctx_lbl.visible      = false;
+            });
         }
 
         /* ── Public API ──────────────────────────────────────────────── */
@@ -169,6 +225,7 @@ namespace LLMStudio.UI {
             backend_manager.clear_conversation ();
             chat_history.new_session ();
             load_blank_page ();
+            update_context_counter ();
         }
 
         public void load_session (ChatSession session) {
@@ -176,7 +233,7 @@ namespace LLMStudio.UI {
             backend_manager.clear_conversation ();
             chat_history.switch_to (session);
 
-            var model_name = backend_manager.loaded_model?.name ?? "Assistant";
+            var model_name = humanized_model_name (backend_manager.loaded_model);
             unowned var msgs = session.get_messages ();
 
             /* Render the full session as a single HTML page. */
@@ -188,9 +245,65 @@ namespace LLMStudio.UI {
                 backend_manager.add_to_conversation (m);
                 if (m.role == "assistant") msg_id_counter++;
             }
+            update_context_counter ();
         }
 
-        /* ── Internal helpers ────────────────────────────────────────── */
+        /* ── Input indicator helpers ─────────────────────────────────── */
+
+        private void update_input_indicators () {
+            var model = backend_manager.loaded_model;
+            if (model == null) {
+                thinking_btn.visible = false;
+                vision_tag.visible   = false;
+                ctx_lbl.visible      = false;
+                return;
+            }
+            /* Thinking toggle */
+            thinking_btn.visible = model.has_thinking;
+            if (model.has_thinking) {
+                thinking_guard = true;
+                thinking_btn.active = model.params.enable_thinking;
+                thinking_guard = false;
+            }
+            /* Vision tag */
+            vision_tag.visible = model.has_vision && model.params.enable_vision;
+            /* Context counter */
+            update_context_counter ();
+        }
+
+        private void update_context_counter () {
+            var model = backend_manager.loaded_model;
+            if (model == null || model.params.context_length <= 0) {
+                ctx_lbl.visible = false;
+                return;
+            }
+            /* Estimate token count as total conversation chars / 4 */
+            int total_chars = 0;
+            foreach (var msg in backend_manager.get_conversation ())
+                total_chars += msg.content.length;
+            int est  = total_chars / 4;
+            int ctx  = model.params.context_length;
+            int pct  = (int) (est * 100.0 / ctx);
+            if (pct > 100) pct = 100;
+
+            ctx_lbl.label   = "%d%%".printf (pct);
+            ctx_lbl.visible = true;
+
+            if (pct >= 80) {
+                ctx_lbl.remove_css_class ("dim-label");
+                ctx_lbl.add_css_class    ("error");
+            } else if (pct >= 60) {
+                ctx_lbl.remove_css_class ("dim-label");
+                ctx_lbl.remove_css_class ("error");
+                ctx_lbl.add_css_class    ("warning");
+            } else {
+                ctx_lbl.remove_css_class ("error");
+                ctx_lbl.remove_css_class ("warning");
+                ctx_lbl.add_css_class    ("dim-label");
+            }
+        }
+
+        /* ── Internal helpers ─────────────────────────────────────────── */
 
         private void load_blank_page () {
             llm_webkit_load_html (web_view, HtmlRenderer.get_page_html (),
@@ -199,6 +312,14 @@ namespace LLMStudio.UI {
 
         private void run_js (string js) {
             llm_webkit_run_js (web_view, js);
+        }
+
+        /* Return a human-readable model label: "publisher/clean-name" or just "clean-name". */
+        private static string humanized_model_name (ModelInfo? model) {
+            if (model == null) return "Assistant";
+            var pub = model.publisher ();
+            return pub != "" ? pub + "/" + model.clean_name ().down ()
+                             : model.clean_name ().down ();
         }
 
         /* Escape a value for embedding in a JS double-quoted string. */
@@ -531,6 +652,7 @@ namespace LLMStudio.UI {
 
             input_view.buffer.text = "";
             send_btn.sensitive     = false;
+            send_btn.visible       = false;
             stop_btn.visible       = true;
             current_request        = new GLib.Cancellable ();
 
@@ -542,7 +664,7 @@ namespace LLMStudio.UI {
             streaming_id   = next_msg_id ();
             think_complete = false;
 
-            string model_name = backend_manager.loaded_model?.name ?? "Assistant";
+            string model_name = humanized_model_name (backend_manager.loaded_model);
             run_js (@"llmStartAssistant(\"$(streaming_id)\",\"$(j(model_name))\");");
 
             do_send.begin (text, (owned) atts, is_first_message);
@@ -551,22 +673,37 @@ namespace LLMStudio.UI {
         private async void do_send (string text, owned GLib.List<ChatAttachment> atts,
                                     bool is_first_message)
         {
-            int64  request_start       = GLib.get_monotonic_time ();
-            int64  first_token_us      = -1;
-            int64  response_start_us   = -1;   // when first non-think token arrives
-            int    token_count         = 0;
+            int64  request_start        = GLib.get_monotonic_time ();
+            int64  first_token_us       = -1;
+            int64  response_start_us    = -1;   // when first non-think token arrives
+            int    token_count          = 0;
             int    response_token_count = 0;
-            string? last_reason        = null;
-            string full_content        = "";
+            string? last_reason         = null;
+            string full_content         = "";
+            bool   stream_complete      = false;
+            string model_name           = humanized_model_name (backend_manager.loaded_model);
+
+            /* Build user message outside the try so it's accessible when persisting. */
+            var user_msg = new ChatMessage.user (text);
+            foreach (var att in atts)
+                user_msg.attachments.append (att);
 
             try {
-                var params   = backend_manager.loaded_model?.params ?? new ModelParams ();
+                var params = backend_manager.loaded_model?.params ?? new ModelParams ();
+                var model  = backend_manager.loaded_model;
                 var messages = new Json.Array ();
 
-                if (params.system_prompt != "") {
+                /* Build system message, injecting /no_think when thinking is disabled
+                   for models that support it. llama.cpp respects this prefix token;
+                   the enable_thinking field in the request body is for ik_llama.cpp. */
+                var system_text = params.system_prompt;
+                if (model != null && model.has_thinking && !params.enable_thinking)
+                    system_text = "/no_think" + (system_text != "" ? "\n\n" + system_text : "");
+
+                if (system_text != "") {
                     var sys = new Json.Object ();
                     sys.set_string_member ("role",    "system");
-                    sys.set_string_member ("content", params.system_prompt);
+                    sys.set_string_member ("content", system_text);
                     var n = new Json.Node (Json.NodeType.OBJECT);
                     n.set_object (sys);
                     messages.add_element (n);
@@ -581,11 +718,6 @@ namespace LLMStudio.UI {
                     n.set_object (o);
                     messages.add_element (n);
                 }
-
-                /* Build the new user message (possibly multimodal) */
-                var user_msg = new ChatMessage.user (text);
-                foreach (var att in atts)
-                    user_msg.attachments.append (att);
 
                 var user_o = new Json.Object ();
                 user_o.set_string_member ("role", "user");
@@ -614,19 +746,8 @@ namespace LLMStudio.UI {
                         }
                         if (reason != null && reason.length > 0)
                             last_reason = reason;
-                        if (done) {
-                            /* Persist — user_msg was already built above with attachments */
-                            var asst_msg = new ChatMessage.assistant (full_content);
-                            backend_manager.get_conversation ().append (user_msg);
-                            backend_manager.get_conversation ().append (asst_msg);
-                            if (chat_history.current != null) {
-                                chat_history.current.add_message (user_msg);
-                                chat_history.current.add_message (asst_msg);
-                                if (is_first_message)
-                                    chat_history.auto_title (text);
-                                chat_history.mark_updated ();
-                            }
-                        }
+                        if (done)
+                            stream_complete = true;
                     },
                     current_request
                 );
@@ -661,10 +782,28 @@ namespace LLMStudio.UI {
                 if (last_reason != null) stats += " \u00b7 %s".printf (last_reason);
             }
 
+            /* Persist the completed exchange with model name and stats. */
+            if (stream_complete) {
+                var asst_msg = new ChatMessage.assistant (full_content);
+                asst_msg.model_name = model_name;
+                asst_msg.stats_text = stats;
+                backend_manager.get_conversation ().append (user_msg);
+                backend_manager.get_conversation ().append (asst_msg);
+                if (chat_history.current != null) {
+                    chat_history.current.add_message (user_msg);
+                    chat_history.current.add_message (asst_msg);
+                    if (is_first_message)
+                        chat_history.auto_title (text);
+                    chat_history.mark_updated ();
+                }
+            }
+
             finalize_streaming (full_content, stats);
+            update_context_counter ();
 
             current_request  = null;
             stop_btn.visible = false;
+            send_btn.visible = true;
             update_send_btn_sensitivity ();
         }
 

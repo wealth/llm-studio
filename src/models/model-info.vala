@@ -61,10 +61,10 @@ namespace LLMStudio {
         public string system_prompt    { get; set; default = "";   }
 
         // Thinking mode (for models that support it, e.g. Qwen3)
-        public bool   enable_thinking  { get; set; default = false;}
+        public bool   enable_thinking  { get; set; default = true; }
 
-        // Vision: load mmproj sidecar (opt-in — adds overhead to all requests)
-        public bool   enable_vision    { get; set; default = false;}
+        // Vision: load mmproj sidecar (on by default when model supports it)
+        public bool   enable_vision    { get; set; default = true; }
 
         public Json.Node to_json () {
             var builder = new Json.Builder ();
@@ -170,8 +170,9 @@ namespace LLMStudio {
         public string?     family     { get; set; default = null; }
         public int64       parameters { get; set; default = 0;    }  // e.g. 7_000_000_000
         public string      gguf_quant { get; set; default = "";   }  // from GGUF file_type header
-        public bool        has_vision { get; set; default = false; }
-        public bool        has_tools  { get; set; default = false; }
+        public bool        has_vision   { get; set; default = false; }
+        public bool        has_tools    { get; set; default = false; }
+        public bool        has_thinking { get; set; default = false; }
         public ModelParams params     { get; set; }
 
         construct {
@@ -437,6 +438,8 @@ namespace LLMStudio {
         public bool     streaming  { get; set; default = false;  }
         public int      token_count{ get; set; default = 0;      }
         public DateTime timestamp  { get; set; }
+        public string   model_name { get; set; default = "";     }
+        public string   stats_text { get; set; default = "";     }
 
         /* Multimodal attachments (images, text files). Field (not property)
            to avoid GLib.List "duplicating list" Vala bug.              */

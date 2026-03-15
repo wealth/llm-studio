@@ -74,7 +74,8 @@ namespace LLMStudio {
                 if (msg.role == "user") {
                     sb.append (user_html (msg.content, msg.attachments));
                 } else if (msg.role == "assistant") {
-                    sb.append (assistant_html (id, msg.content, model_name));
+                    string name = msg.model_name != "" ? msg.model_name : model_name;
+                    sb.append (assistant_html (id, msg.content, name, msg.stats_text));
                     id++;
                 }
             }
@@ -119,7 +120,8 @@ namespace LLMStudio {
 
         private static string assistant_html (int id,
                                               string content,
-                                              string model_name)
+                                              string model_name,
+                                              string stats_text = "")
         {
             string think = "";
             string resp  = content;
@@ -148,22 +150,11 @@ namespace LLMStudio {
             sb.append ("<div class=\"asst-name\">" + html_esc (model_name) + "</div>");
 
             if (think != "") {
+                /* Store raw think text; llmRenderAll() will call renderThinkText() on it. */
                 sb.append ("<details class=\"think\"><summary>Thinking\u2026</summary>");
-                sb.append ("<div>");
-                /* Plain-text render: preserve paragraphs and line breaks. */
-                foreach (var para in think.split ("\n\n")) {
-                    var line = para.strip ();
-                    if (line == "") continue;
-                    sb.append ("<p>");
-                    bool first_line = true;
-                    foreach (var ln in line.split ("\n")) {
-                        if (!first_line) sb.append ("<br>");
-                        sb.append (html_esc (ln));
-                        first_line = false;
-                    }
-                    sb.append ("</p>");
-                }
-                sb.append ("</div></details>");
+                sb.append ("<div data-think-raw=\"");
+                sb.append (html_esc (think));
+                sb.append ("\"></div></details>");
             }
 
             sb.append ("<div class=\"asst-content\" id=\"" + sid + "\" data-raw=\"");
@@ -171,6 +162,7 @@ namespace LLMStudio {
             sb.append ("\">");
             sb.append (resp_html);
             sb.append ("</div>");
+            sb.append ("<div class=\"asst-stats\">" + html_esc (stats_text) + "</div>");
             sb.append ("<div class=\"asst-actions\">" +
                        "<button onclick=\"llmCopy('" + sid + "')\">Copy</button>" +
                        "</div>");
@@ -262,7 +254,14 @@ function katexEl(el){
     try{renderMathInElement(el,KATEX_OPTS);}catch(e){console.error(e);}
   }
 }
-function llmRenderAll(){katexEl(document.body);}
+function llmRenderAll(){
+  /* Render think-block placeholders from session-loaded messages. */
+  document.querySelectorAll('[data-think-raw]').forEach(function(el){
+    el.innerHTML=renderThinkText(el.dataset.thinkRaw);
+    el.removeAttribute('data-think-raw');
+  });
+  katexEl(document.body);
+}
 function scrollBottom(){window.scrollTo(0,document.body.scrollHeight);}
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function llmClear(){document.getElementById('chat').innerHTML='';}
@@ -306,11 +305,11 @@ function llmStartAssistant(id,model){
   d.id='row-'+id;
   d.innerHTML=
     '<div class="asst-name">'+escHtml(model)+'</div>'+
-    '<div class="asst-content" id="'+id+'">'+
-      '<div id="resp-'+id+'"><span class="dot"></span></div>'+
+    '<div class="asst-content">'+
+      '<div class="resp"><span class="dot"></span></div>'+
     '</div>'+
-    '<div class="asst-stats" id="stats-'+id+'"></div>'+
-    '<div class="asst-actions" id="act-'+id+'" style="display:none"></div>';
+    '<div class="asst-stats"></div>'+
+    '<div class="asst-actions" style="display:none"></div>';
   document.getElementById('chat').appendChild(d);
   scrollBottom();
 }
@@ -339,46 +338,75 @@ function renderThinkText(raw){
   }).join('');
 }
 function llmSetThink(id,raw){
-  var el=document.getElementById(id);
+  var row=document.getElementById('row-'+id);
+  if(!row)return;
+  var el=row.querySelector('.asst-content');
   if(!el)return;
   var det=el.querySelector('details.think');
   if(!det){
     det=document.createElement('details');
     det.className='think';
     det.open=true;
-    det.innerHTML='<summary>Thinking\u2026</summary><div id="tk-'+id+'"></div>';
+    det.innerHTML='<summary>Thinking\u2026</summary><div class="tk"></div>';
     el.insertBefore(det,el.firstChild);
   }
-  var tk=document.getElementById('tk-'+id);
+  var tk=det.querySelector('.tk');
   if(tk){tk.innerHTML=renderThinkText(raw);katexEl(tk);}
   scrollBottom();
 }
 function llmSetContent(id,html){
-  var resp=document.getElementById('resp-'+id);
+  var row=document.getElementById('row-'+id);
+  if(!row)return;
+  var resp=row.querySelector('.resp');
   if(!resp)return;
   resp.innerHTML=html;
   katexEl(resp);
   scrollBottom();
 }
 function llmFinalize(id,thinkRaw,contentHtml,rawContent){
-  var el=document.getElementById(id);
+  var row=document.getElementById('row-'+id);
+  if(!row)return;
+  var el=row.querySelector('.asst-content');
   if(!el)return;
-  var html='';
+  /* Update think block in-place (reuse streaming element, don't rebuild). */
+  var det=el.querySelector('details.think');
   if(thinkRaw){
-    html+='<details class="think"><summary>Thinking\u2026</summary>';
-    html+='<div id="tk-'+id+'">'+renderThinkText(thinkRaw)+'</div></details>';
+    if(!det){
+      det=document.createElement('details');
+      det.className='think';
+      det.innerHTML='<summary>Thinking\u2026</summary><div class="tk"></div>';
+      el.insertBefore(det,el.firstChild);
+    }
+    det.open=false;
+    var tk=det.querySelector('.tk');
+    if(!tk){tk=document.createElement('div');tk.className='tk';det.appendChild(tk);}
+    tk.innerHTML=renderThinkText(thinkRaw);
+  } else if(det){
+    el.removeChild(det);
   }
-  html+='<div id="resp-'+id+'">'+contentHtml+'</div>';
-  el.innerHTML=html;
-  el.dataset.raw=rawContent;
+  /* Update response div in-place. */
+  var resp=row.querySelector('.resp');
+  if(!resp){resp=document.createElement('div');resp.className='resp';el.appendChild(resp);}
+  resp.innerHTML=contentHtml;
+  row.dataset.raw=rawContent;
   katexEl(el);
-  var act=document.getElementById('act-'+id);
-  if(act){act.style.display='';act.innerHTML='<button onclick="llmCopy(\''+id+'\')">Copy</button>';}
+  var act=row.querySelector('.asst-actions');
+  if(act){act.style.display='';act.innerHTML='<button onclick="llmCopyRow(\''+id+'\')">Copy</button>';}
   scrollBottom();
 }
 function llmSetStats(id,text){
-  var el=document.getElementById('stats-'+id);
-  if(el)el.textContent=text;
+  var row=document.getElementById('row-'+id);
+  if(row){var el=row.querySelector('.asst-stats');if(el)el.textContent=text;}
+}
+function llmCopyRow(id){
+  var row=document.getElementById('row-'+id);
+  if(row){navigator.clipboard.writeText(row.dataset.raw||row.textContent).catch(function(){});}
+}
+function llmCopyChat(){
+  var chat=document.getElementById('chat');
+  if(!chat)return false;
+  navigator.clipboard.writeText(chat.outerHTML).catch(function(){});
+  return true;
 }
 """;
 

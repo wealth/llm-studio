@@ -277,6 +277,13 @@ namespace LLMStudio.UI {
                 tag.valign = Gtk.Align.CENTER;
                 name_box.append (tag);
             }
+            if (model.has_thinking) {
+                var tag = new Gtk.Label ("Thinking");
+                tag.add_css_class ("badge");
+                tag.add_css_class ("badge-thinking");
+                tag.valign = Gtk.Align.CENTER;
+                name_box.append (tag);
+            }
             box.append (name_box);
 
             // ── Quant badge ───────────────────────────────────────────────

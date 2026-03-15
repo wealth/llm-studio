@@ -38,6 +38,8 @@ namespace LLMStudio {
                 var mo = new Json.Object ();
                 mo.set_string_member ("role",    m.role);
                 mo.set_string_member ("content", m.content);
+                if (m.model_name != "") mo.set_string_member ("model_name", m.model_name);
+                if (m.stats_text != "") mo.set_string_member ("stats_text", m.stats_text);
                 if (m.has_attachments ()) {
                     var atts = new Json.Array ();
                     foreach (var a in m.attachments) {
@@ -77,6 +79,8 @@ namespace LLMStudio {
                         case "assistant": msg = new ChatMessage.assistant (content); break;
                         default:          msg = new ChatMessage.user      (content); break;
                     }
+                    if (mo.has_member ("model_name")) msg.model_name = mo.get_string_member ("model_name");
+                    if (mo.has_member ("stats_text")) msg.stats_text = mo.get_string_member ("stats_text");
                     if (mo.has_member ("attachments")) {
                         var aa = mo.get_array_member ("attachments");
                         for (uint j = 0; j < aa.get_length (); j++) {

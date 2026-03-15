@@ -131,6 +131,10 @@ namespace LLMStudio {
                             || tmpl.contains ("<tool_response>")
                             || tmpl.contains ("[TOOL_CALLS]")
                             || tmpl.contains ("tool_code");
+                        model.has_thinking = tmpl.contains ("<think>")
+                            || tmpl.contains ("</think>")
+                            || tmpl.contains ("/think")
+                            || tmpl.contains ("thinking_mode");
                         found++;
                     } else {
                         skip_value (dis, val_type, version);
@@ -165,6 +169,26 @@ namespace LLMStudio {
                          || s.has_suffix ("-vl")  || s.has_suffix ("_vl")
                          || s.contains ("vision") || s.contains ("visual")) {
                             model.has_vision = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Family/name fallback for thinking models
+                if (!model.has_thinking) {
+                    string[] candidates = {
+                        (model.family ?? "").down (),
+                        model.name.down (),
+                        (model.description ?? "").down ()
+                    };
+                    foreach (string s in candidates) {
+                        if (s == "") continue;
+                        if (s.contains ("qwq")
+                         || s.contains ("deepseek_r1") || s.contains ("deepseek-r1")
+                         || s.has_suffix ("-r1") || s.has_suffix ("_r1")
+                         || s.contains ("-r1-") || s.contains ("_r1_")
+                         || s.contains ("thinking")) {
+                            model.has_thinking = true;
                             break;
                         }
                     }

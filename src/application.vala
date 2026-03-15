@@ -206,6 +206,31 @@ namespace LLMStudio {
                     background-color: alpha(@green_4, 0.2);
                     color: @green_4;
                 }
+                .badge.badge-thinking {
+                    background-color: alpha(@purple_3, 0.2);
+                    color: @purple_3;
+                }
+                .input-tag {
+                    border-radius: 99px;
+                    padding: 2px 10px;
+                    font-size: 12px;
+                    font-weight: 500;
+                }
+                .input-tag-vision {
+                    background-color: alpha(@yellow_4, 0.2);
+                    color: @yellow_4;
+                }
+                .thinking-toggle {
+                    border-radius: 99px;
+                    padding: 2px 10px;
+                    font-size: 12px;
+                    min-height: 0;
+                    box-shadow: none;
+                }
+                .thinking-toggle:checked {
+                    background-color: alpha(@purple_3, 0.2);
+                    color: @purple_3;
+                }
                 .dl-badge {
                     background: @accent_bg_color;
                     color: @accent_fg_color;
@@ -225,14 +250,13 @@ namespace LLMStudio {
                 headerbar.flat {
                     min-height: 47px;
                 }
-                dropdown.model-selector > button {
+                button.model-selector {
                     background-color: alpha(@window_fg_color, 0.08);
-                    color: @window_fg_color;
                     border-radius: 99px;
                     padding: 2px 16px;
                     box-shadow: none;
                 }
-                dropdown.model-selector.model-loaded > button {
+                button.model-selector.model-loaded {
                     background-color: @accent_bg_color;
                     color: @accent_fg_color;
                 }
@@ -241,7 +265,7 @@ namespace LLMStudio {
                     50%  { background-color: alpha(@accent_bg_color, 0.55); }
                     100% { background-color: alpha(@accent_bg_color, 0.15); }
                 }
-                dropdown.model-selector.loading > button {
+                button.model-selector.loading {
                     animation: model-shimmer 1.4s ease-in-out infinite;
                     color: @accent_fg_color;
                 }
