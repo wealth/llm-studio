@@ -121,6 +121,12 @@ namespace LLMStudio {
                     } else if (key == "general.file_type" && val_type == GGUF_TYPE_UINT32) {
                         model.gguf_quant = ftype_to_string (dis.read_uint32 ());
                         found++;
+                    } else if (key.has_suffix (".block_count") && !key.has_prefix ("clip.")
+                            && (val_type == GGUF_TYPE_UINT32 || val_type == GGUF_TYPE_UINT64)) {
+                        model.block_count = val_type == GGUF_TYPE_UINT64
+                            ? (int) dis.read_uint64 ()
+                            : (int) dis.read_uint32 ();
+                        found++;
                     } else if (key == "clip.has_vision_encoder" && val_type == GGUF_TYPE_BOOL) {
                         model.has_vision = dis.read_byte () != 0;
                         found++;

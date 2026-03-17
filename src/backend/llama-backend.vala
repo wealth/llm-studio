@@ -7,6 +7,8 @@ namespace LLMStudio {
         private int              port;
         private BackendType      _type;
         private GLib.Cancellable? load_cancel;
+        private string?          _load_error_hint  = null;
+        private bool             _process_exited   = false;
 
         public override BackendStatus status       { get; protected set; default = BackendStatus.IDLE; }
         public override ModelInfo?    loaded_model { get; protected set; default = null; }
@@ -48,7 +50,9 @@ namespace LLMStudio {
             if (status == BackendStatus.LOADING || status == BackendStatus.READY)
                 yield unload_model ();
 
-            load_cancel = cancel ?? new GLib.Cancellable ();
+            load_cancel      = cancel ?? new GLib.Cancellable ();
+            _load_error_hint = null;
+            _process_exited  = false;
             status = BackendStatus.LOADING;
             status_changed (status);
 
@@ -118,7 +122,9 @@ namespace LLMStudio {
                 status_changed (status);
                 if (load_cancel.is_cancelled ())
                     throw new IOError.CANCELLED ("Cancelled");
-                throw new IOError.FAILED ("Server failed to start");
+                string hint = _load_error_hint ?? "Server failed to start — check the Logs tab for details.";
+                _load_error_hint = null;
+                throw new IOError.FAILED (hint);
             }
 
             /* Warmup: send a minimal inference request so that CUDA kernel compilation
@@ -157,7 +163,7 @@ namespace LLMStudio {
         private async bool wait_for_ready (GLib.Cancellable cancel) {
             for (int i = 0; i < 120 && !cancel.is_cancelled (); i++) {
                 yield llama_sleep (500);
-                if (process == null) return false;
+                if (process == null || _process_exited) return false;
                 try {
                     var msg = new Soup.Message ("GET", "http://127.0.0.1:%d/health".printf (port));
                     var bytes = yield session_fetch (msg, cancel);
@@ -179,9 +185,24 @@ namespace LLMStudio {
             var ds = new GLib.DataInputStream (istream);
             string? line;
             try {
-                while ((line = yield ds.read_line_async (GLib.Priority.DEFAULT, null)) != null)
+                while ((line = yield ds.read_line_async (GLib.Priority.DEFAULT, null)) != null) {
                     log_message (line, false);
+                    // Capture the first actionable error hint for the load-failure dialog.
+                    if (_load_error_hint == null) {
+                        string lo = line.ascii_down ();
+                        if (lo.contains ("outofdevicememory") || lo.contains ("outofhostmemory") ||
+                                lo.contains ("failed to allocate") || lo.contains ("unable to allocate")) {
+                            _load_error_hint = "Not enough VRAM/RAM to load the model.\n"
+                                + "Open Load settings and reduce GPU Layers (set to 0 for CPU-only).";
+                        } else if (lo.contains ("error loading model") || lo.contains ("failed to load model")) {
+                            _load_error_hint = "Model loading failed — check the Logs tab for details.";
+                        } else if (lo.contains ("tensor size mismatch") || lo.contains ("bad magic")) {
+                            _load_error_hint = "Model file appears corrupt or incompatible.";
+                        }
+                    }
+                }
             } catch (Error e) {}
+            _process_exited = true;
             if (status == BackendStatus.READY) {
                 status = BackendStatus.ERROR;
                 status_changed (status);

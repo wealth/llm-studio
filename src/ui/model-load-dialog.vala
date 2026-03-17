@@ -10,7 +10,9 @@ namespace LLMStudio.UI {
         private Adw.SpinRow ubatch_row;
 
         // Hardware group
-        private Adw.SpinRow gpu_layers_row;
+        private Gtk.Scale   gpu_layers_scale;
+        private Gtk.Label   gpu_layers_val_lbl;
+        private int         gpu_layers_max;
         private Adw.SpinRow threads_row;
         private Adw.SwitchRow flash_attn_row;
         private Adw.SwitchRow mmap_row;
@@ -138,8 +140,82 @@ namespace LLMStudio.UI {
             hw_group.title = "Hardware Acceleration";
             content_box.append (hw_group);
 
-            gpu_layers_row = make_spin_row ("GPU Layers", "Number of model layers to offload to GPU (-1 = all)",
-                -1, 999, params.gpu_layers, 1);
+            // Probe hardware for slider hints
+            int64 vram_bytes = probe_gpu_vram ();
+            int64 ram_bytes  = probe_system_ram ();
+            gpu_layers_max   = model.block_count > 0 ? model.block_count : 200;
+
+            int suggested_layers = 0;
+            if (vram_bytes > 0 && gpu_layers_max > 0 && model.size > 0) {
+                int64 bytes_per_layer = model.size / gpu_layers_max;
+                if (bytes_per_layer > 0) {
+                    suggested_layers = (int) ((int64)(vram_bytes * 0.85) / bytes_per_layer);
+                    if (suggested_layers > gpu_layers_max) suggested_layers = gpu_layers_max;
+                    if (suggested_layers < 0)             suggested_layers = 0;
+                }
+            }
+
+            // Hardware info subtitle
+            var hw_info_parts = new GLib.Array<string> ();
+            if (vram_bytes > 0)
+                hw_info_parts.append_val ("GPU: %.1f GB VRAM".printf (vram_bytes / (1024.0 * 1024.0 * 1024.0)));
+            if (ram_bytes > 0)
+                hw_info_parts.append_val ("RAM: %.0f GB".printf (ram_bytes / (1024.0 * 1024.0 * 1024.0)));
+            if (hw_info_parts.length > 0) {
+                string[] hw_arr = {};
+                for (uint i = 0; i < hw_info_parts.length; i++) hw_arr += hw_info_parts.index (i);
+                hw_group.description = string.joinv (" · ", hw_arr);
+            }
+
+            // GPU Layers slider
+            var gpu_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 4);
+            gpu_box.margin_top    = 10;
+            gpu_box.margin_bottom = 8;
+            gpu_box.margin_start  = 12;
+            gpu_box.margin_end    = 12;
+
+            var gpu_header = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            var gpu_title_lbl = new Gtk.Label ("GPU Layers");
+            gpu_title_lbl.halign  = Gtk.Align.START;
+            gpu_title_lbl.hexpand = true;
+            gpu_layers_val_lbl = new Gtk.Label ("");
+            gpu_layers_val_lbl.add_css_class ("dim-label");
+            gpu_header.append (gpu_title_lbl);
+            gpu_header.append (gpu_layers_val_lbl);
+
+            var gpu_sub_lbl = new Gtk.Label (
+                model.block_count > 0
+                    ? "Transformer layers to offload to GPU (%d total)".printf (model.block_count)
+                    : "Transformer layers to offload to GPU");
+            gpu_sub_lbl.halign = Gtk.Align.START;
+            gpu_sub_lbl.add_css_class ("dim-label");
+            gpu_sub_lbl.add_css_class ("caption");
+
+            gpu_layers_scale = new Gtk.Scale.with_range (Gtk.Orientation.HORIZONTAL, 0, gpu_layers_max, 1);
+            gpu_layers_scale.hexpand     = true;
+            gpu_layers_scale.draw_value  = false;
+            gpu_layers_scale.add_mark (0,              Gtk.PositionType.BOTTOM, "CPU only");
+            gpu_layers_scale.add_mark (gpu_layers_max, Gtk.PositionType.BOTTOM, "All");
+            if (suggested_layers > 0 && suggested_layers < gpu_layers_max)
+                gpu_layers_scale.add_mark (suggested_layers, Gtk.PositionType.BOTTOM, "Suggested");
+
+            int init_gpu = params.gpu_layers < 0
+                ? gpu_layers_max
+                : params.gpu_layers.clamp (0, gpu_layers_max);
+            gpu_layers_scale.set_value (init_gpu);
+            update_gpu_layers_label (init_gpu);
+            gpu_layers_scale.value_changed.connect (() =>
+                update_gpu_layers_label ((int) gpu_layers_scale.get_value ()));
+
+            gpu_box.append (gpu_header);
+            gpu_box.append (gpu_sub_lbl);
+            gpu_box.append (gpu_layers_scale);
+            var gpu_row = new Adw.PreferencesRow ();
+            gpu_row.activatable = false;
+            gpu_row.focusable   = false;
+            gpu_row.set_child (gpu_box);
+            hw_group.add (gpu_row);
+
             threads_row = make_spin_row ("CPU Threads", "Number of CPU threads to use (-1 = auto)",
                 -1, 256, params.cpu_threads, 1);
             flash_attn_row = make_switch_row ("Flash Attention", "Use flash attention for faster inference",
@@ -148,7 +224,6 @@ namespace LLMStudio.UI {
                 params.mmap);
             mlock_row = make_switch_row ("Memory Lock", "Lock model weights in RAM (prevents swapping)",
                 params.mlock);
-            hw_group.add (gpu_layers_row);
             hw_group.add (threads_row);
             hw_group.add (flash_attn_row);
             hw_group.add (mmap_row);
@@ -282,12 +357,89 @@ namespace LLMStudio.UI {
             return row;
         }
 
+        private void update_gpu_layers_label (int v) {
+            if (v == 0)
+                gpu_layers_val_lbl.label = "CPU only";
+            else if (v >= gpu_layers_max)
+                gpu_layers_val_lbl.label = "All %d layers".printf (gpu_layers_max);
+            else
+                gpu_layers_val_lbl.label = "%d / %d layers".printf (v, gpu_layers_max);
+        }
+
+        // Returns total VRAM in bytes from the first detected GPU, or 0 if not detected.
+        internal static int64 probe_vram () { return probe_gpu_vram (); }
+        private static int64 probe_gpu_vram () {
+            // AMD: /sys/class/drm/card*/device/mem_info_vram_total
+            try {
+                var drm = GLib.File.new_for_path ("/sys/class/drm");
+                var enumerator = drm.enumerate_children (
+                    GLib.FileAttribute.STANDARD_NAME, GLib.FileQueryInfoFlags.NONE);
+                GLib.FileInfo? fi;
+                while ((fi = enumerator.next_file ()) != null) {
+                    string card = fi.get_name ();
+                    if (!card.has_prefix ("card")) continue;
+                    string vpath = "/sys/class/drm/%s/device/mem_info_vram_total".printf (card);
+                    try {
+                        string content;
+                        GLib.FileUtils.get_contents (vpath, out content);
+                        int64 v = int64.parse (content.strip ());
+                        if (v > 0) return v;
+                    } catch {}
+                }
+            } catch {}
+            // NVIDIA: /proc/driver/nvidia/gpus/*/information
+            try {
+                var ngpus = GLib.File.new_for_path ("/proc/driver/nvidia/gpus");
+                var enumerator = ngpus.enumerate_children (
+                    GLib.FileAttribute.STANDARD_NAME, GLib.FileQueryInfoFlags.NONE);
+                GLib.FileInfo? fi;
+                while ((fi = enumerator.next_file ()) != null) {
+                    string ipath = "/proc/driver/nvidia/gpus/%s/information".printf (fi.get_name ());
+                    try {
+                        string content;
+                        GLib.FileUtils.get_contents (ipath, out content);
+                        foreach (string line in content.split ("\n")) {
+                            if (!line.down ().contains ("video memory:")) continue;
+                            string[] tok = line.split (":");
+                            if (tok.length < 2) continue;
+                            string val_str = tok[1].strip ();
+                            if (val_str.has_suffix (" MB")) {
+                                int64 mb = int64.parse (val_str[0:val_str.length - 3]);
+                                if (mb > 0) return mb * 1024 * 1024;
+                            }
+                        }
+                    } catch {}
+                }
+            } catch {}
+            return 0;
+        }
+
+        // Returns total system RAM in bytes from /proc/meminfo, or 0 if not readable.
+        private static int64 probe_system_ram () {
+            try {
+                string content;
+                GLib.FileUtils.get_contents ("/proc/meminfo", out content);
+                foreach (string line in content.split ("\n")) {
+                    if (!line.has_prefix ("MemTotal:")) continue;
+                    string[] tok = line.split (":");
+                    if (tok.length < 2) continue;
+                    string val_str = tok[1].strip ();
+                    if (val_str.has_suffix (" kB")) {
+                        int64 kb = int64.parse (val_str[0:val_str.length - 3]);
+                        if (kb > 0) return kb * 1024;
+                    }
+                }
+            } catch {}
+            return 0;
+        }
+
         private void on_load_clicked () {
             // Harvest values
             params.context_length    = (int) ctx_row.get_value ();
             params.batch_size        = (int) batch_row.get_value ();
             params.ubatch_size       = (int) ubatch_row.get_value ();
-            params.gpu_layers        = (int) gpu_layers_row.get_value ();
+            int gl = (int) gpu_layers_scale.get_value ();
+            params.gpu_layers        = (gl >= gpu_layers_max) ? -1 : gl;
             params.cpu_threads       = (int) threads_row.get_value ();
             params.flash_attention   = flash_attn_row.active;
             params.mmap              = mmap_row.active;

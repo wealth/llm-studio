@@ -346,14 +346,30 @@ namespace LLMStudio.UI {
             dlg.response.connect ((response) => {
                 if (response != "delete") return;
                 model_manager.remove_model (model);
-                try {
-                    GLib.FileUtils.unlink (model.path);
-                    // Also remove sidecar params file if present
+                int total = ModelInfo.part_total (model.name);
+                if (total > 1) {
+                    // Multi-part model: delete all parts and sidecar
+                    string dir  = GLib.Path.get_dirname (model.path);
+                    string stem = ModelInfo.strip_part_suffix (
+                        model.name.has_suffix (".gguf")
+                            ? model.name.substring (0, model.name.length - 5) : model.name);
+                    for (int n = 1; n <= total; n++) {
+                        string ppath = GLib.Path.build_filename (
+                            dir, "%s-%05d-of-%05d.gguf".printf (stem, n, total));
+                        try { GLib.FileUtils.unlink (ppath); } catch {}
+                    }
                     var sidecar = model.path + ".llmstudio.json";
                     if (GLib.FileUtils.test (sidecar, GLib.FileTest.EXISTS))
-                        GLib.FileUtils.unlink (sidecar);
-                } catch (Error e) {
-                    warning ("Could not delete model file %s: %s", model.path, e.message);
+                        try { GLib.FileUtils.unlink (sidecar); } catch {}
+                } else {
+                    try {
+                        GLib.FileUtils.unlink (model.path);
+                        var sidecar = model.path + ".llmstudio.json";
+                        if (GLib.FileUtils.test (sidecar, GLib.FileTest.EXISTS))
+                            GLib.FileUtils.unlink (sidecar);
+                    } catch (Error e) {
+                        warning ("Could not delete model file %s: %s", model.path, e.message);
+                    }
                 }
             });
             dlg.present (get_root () as Gtk.Window);

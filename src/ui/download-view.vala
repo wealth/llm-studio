@@ -12,7 +12,7 @@ namespace LLMStudio.UI {
         private Gtk.Spinner          search_spinner;
         private Gtk.Stack            content_stack;
         private Gtk.ListBox          downloads_list;
-        private GLib.List<HuggingFace.DownloadTask> active_downloads;
+        private GLib.List<HuggingFace.DownloadGroup> active_groups;
         private GLib.Cancellable?    search_cancel;
 
         private int    active_count  = 0;
@@ -26,7 +26,7 @@ namespace LLMStudio.UI {
             this.hf_client     = client;
             this.model_manager = mgr;
             this.settings      = settings;
-            this.active_downloads = new GLib.List<HuggingFace.DownloadTask> ();
+            this.active_groups    = new GLib.List<HuggingFace.DownloadGroup> ();
             this.history          = new GLib.List<HuggingFace.DownloadRecord> ();
 
             var data_dir = GLib.Path.build_filename (
@@ -362,9 +362,8 @@ namespace LLMStudio.UI {
             scroll.set_child (file_list);
 
             int file_count = 0;
-            foreach (var sib in model.siblings) {
-                if (sib.get_model_format () != ModelFormat.GGUF) continue;
-                if (sib.filename.down ().contains ("mmproj")) continue;
+            var groups = model.get_gguf_file_groups ();
+            foreach (var grp in groups) {
                 file_count++;
 
                 var row_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 10);
@@ -374,45 +373,33 @@ namespace LLMStudio.UI {
                 row_box.margin_end    = 10;
 
                 // Quant badge
-                string stem = sib.filename;
-                if (stem.has_suffix (".gguf"))        stem = stem.substring (0, stem.length - 5);
-                if (stem.has_suffix (".safetensors")) stem = stem.substring (0, stem.length - 12);
-                string quant = "";
-                foreach (unowned string part in stem.split_set ("-.")) {
-                    string up = part.ascii_up ();
-                    if (up == "BF16" || up == "F16" || up == "F32" || up == "FP16" || up == "FP32") { quant = up; break; }
-                    if (up.length >= 2 && up.get_char (0) == 'Q' && up.get_char (1).isdigit ()) { quant = up; break; }
-                    if (up.length >= 3 && up.get_char (0) == 'I' && up.get_char (1) == 'Q' && up.get_char (2).isdigit ()) { quant = up; break; }
-                    if (up.has_prefix ("MXFP")) { quant = up; break; }
-                }
-                if (quant != "") {
-                    var qbadge = new Gtk.Label (quant);
+                if (grp.quant != "") {
+                    var qbadge = new Gtk.Label (grp.quant);
                     qbadge.add_css_class ("badge");
                     qbadge.add_css_class ("quant");
-                    qbadge.valign = Gtk.Align.CENTER;
+                    qbadge.valign      = Gtk.Align.CENTER;
                     qbadge.width_chars = 9;
                     row_box.append (qbadge);
                 }
 
-                // Name (strip quant suffix for cleanliness)
-                string display_name = stem;
-                if (quant != "") {
-                    string up_name = display_name.ascii_up ();
-                    foreach (string sep in new string[] {"-", ".", "_"}) {
-                        if (up_name.has_suffix (sep + quant)) {
-                            display_name = display_name.substring (0, display_name.length - quant.length - 1);
-                            break;
-                        }
-                    }
-                }
-                var name_lbl = new Gtk.Label (display_name);
-                name_lbl.halign   = Gtk.Align.START;
-                name_lbl.hexpand  = true;
+                // Name
+                var name_lbl = new Gtk.Label (grp.display_name ());
+                name_lbl.halign    = Gtk.Align.START;
+                name_lbl.hexpand   = true;
                 name_lbl.ellipsize = Pango.EllipsizeMode.MIDDLE;
                 row_box.append (name_lbl);
 
-                // Size
-                var size_lbl = new Gtk.Label (sib.format_size ());
+                // Parts count hint
+                if (grp.part_count () > 1) {
+                    var parts_lbl = new Gtk.Label ("%d parts".printf (grp.part_count ()));
+                    parts_lbl.add_css_class ("caption");
+                    parts_lbl.add_css_class ("dim-label");
+                    parts_lbl.valign = Gtk.Align.CENTER;
+                    row_box.append (parts_lbl);
+                }
+
+                // Total size
+                var size_lbl = new Gtk.Label (grp.format_size ());
                 size_lbl.add_css_class ("caption");
                 size_lbl.add_css_class ("dim-label");
                 size_lbl.add_css_class ("monospace");
@@ -426,11 +413,11 @@ namespace LLMStudio.UI {
                     ? "Download model + vision projection (mmproj)"
                     : "Download";
                 dl_btn.valign = Gtk.Align.CENTER;
-                var file_ref  = sib;
+                var grp_ref   = grp;
                 var model_ref = model;
                 dl_btn.clicked.connect (() => {
                     dialog.close ();
-                    start_download (model_ref, file_ref, model_ref.get_best_mmproj ());
+                    start_download_group (model_ref, grp_ref, model_ref.get_best_mmproj ());
                 });
                 row_box.append (dl_btn);
 
@@ -452,47 +439,59 @@ namespace LLMStudio.UI {
             dialog.present ();
         }
 
-        private void start_download (HuggingFace.HFModel model,
-                                     HuggingFace.HFModelFile file,
-                                     HuggingFace.HFModelFile? mmproj = null) {
+        // Starts downloading all files in a quant group (multi-part + optional mmproj)
+        // and shows a single aggregated row in the downloads panel.
+        private void start_download_group (HuggingFace.HFModel model,
+                                           HuggingFace.HFModelFileGroup file_grp,
+                                           HuggingFace.HFModelFile? mmproj = null) {
+            // Use short_id() to avoid doubling the author when modelId contains "author/name".
             var dest_dir = GLib.Path.build_filename (
-                model_manager.get_models_dir (), model.author, model.model_name);
+                model_manager.get_models_dir (), model.author, model.short_id ());
 
-            hf_client.download_file.begin (model.id, file.filename, dest_dir,
-                (obj, res) => {
-                    try {
-                        var task = hf_client.download_file.end (res);
-                        active_downloads.append (task);
-                        add_download_row (task);
-                    } catch (Error e) {
-                        show_toast ("Download failed: " + e.message);
-                    }
-                }
-            );
+            var group = new HuggingFace.DownloadGroup ();
+            group.model_id     = model.id;
+            group.model_repo   = model.id;
+            group.display_name = file_grp.base_stem;
+            group.dest_dir     = dest_dir;
+            foreach (var f in file_grp.files) group.filenames.append (f.filename);
+            if (mmproj != null) group.filenames.append (mmproj.filename);
 
-            /* Also download the vision projection file if available. */
-            if (mmproj != null) {
-                hf_client.download_file.begin (model.id, mmproj.filename, dest_dir,
+            active_groups.append (group);
+            add_download_group_row (group);
+
+            launch_group_downloads (group);
+        }
+
+        // (Re-)launches downloads for every filename in a group.
+        private void launch_group_downloads (HuggingFace.DownloadGroup group) {
+            foreach (var fname in group.filenames) {
+                string fref = fname;
+                hf_client.download_file.begin (group.model_id, fref, group.dest_dir,
                     (obj, res) => {
                         try {
                             var task = hf_client.download_file.end (res);
-                            active_downloads.append (task);
-                            add_download_row (task);
+                            group.add_task (task);
+                            upsert_history (group.model_id, task.filename, task.dest_path,
+                                            "in_progress", 0, null);
                         } catch (Error e) {
-                            show_toast ("mmproj download failed: " + e.message);
+                            show_toast ("Download failed: " + e.message);
                         }
                     }
                 );
             }
         }
 
-        private void add_download_row (HuggingFace.DownloadTask task) {
+        // Creates one UI row that aggregates progress for all tasks in the group.
+        private void add_download_group_row (HuggingFace.DownloadGroup group) {
             active_count++;
             active_count_changed (active_count);
 
-            /* Save as in_progress immediately so a crash/close is resumable. */
-            upsert_history (task.model_id, task.filename, task.dest_path,
-                            "in_progress", 0, null);
+            // Mark every file as in_progress for resume on next launch.
+            foreach (var fname in group.filenames) {
+                upsert_history (group.model_id, fname,
+                                GLib.Path.build_filename (group.dest_dir, fname),
+                                "in_progress", 0, null);
+            }
 
             var row_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 6);
             row_box.margin_top    = 10;
@@ -500,86 +499,143 @@ namespace LLMStudio.UI {
             row_box.margin_start  = 14;
             row_box.margin_end    = 14;
 
-            var name_lbl = new Gtk.Label (task.filename);
+            // ── Header: name + action button ─────────────────────────────
+            var header = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+
+            var name_lbl = new Gtk.Label (group.display_name);
             name_lbl.halign    = Gtk.Align.START;
             name_lbl.hexpand   = true;
             name_lbl.ellipsize = Pango.EllipsizeMode.MIDDLE;
             name_lbl.add_css_class ("body");
+            header.append (name_lbl);
 
-            var model_lbl = new Gtk.Label (task.model_id);
-            model_lbl.halign = Gtk.Align.START;
-            model_lbl.add_css_class ("caption");
-            model_lbl.add_css_class ("dim-label");
+            var action_btn = new Gtk.Button.from_icon_name ("process-stop-symbolic");
+            action_btn.add_css_class ("flat");
+            action_btn.add_css_class ("circular");
+            action_btn.tooltip_text = "Cancel";
+            action_btn.valign       = Gtk.Align.CENTER;
+            header.append (action_btn);
+
+            row_box.append (header);
+
+            // ── Repo label ───────────────────────────────────────────────
+            var repo_lbl = new Gtk.Label (group.model_repo);
+            repo_lbl.halign = Gtk.Align.START;
+            repo_lbl.add_css_class ("caption");
+            repo_lbl.add_css_class ("dim-label");
+            row_box.append (repo_lbl);
+
+            // ── Status stack ─────────────────────────────────────────────
+            var status_stack = new Gtk.Stack ();
+            status_stack.transition_type     = Gtk.StackTransitionType.CROSSFADE;
+            status_stack.transition_duration = 150;
 
             var progress_bar = new Gtk.ProgressBar ();
             progress_bar.show_text = true;
-            progress_bar.text = "Starting…";
+            progress_bar.text      = "Starting…";
+            status_stack.add_named (progress_bar, "running");
 
-            var cancel_btn = new Gtk.Button.from_icon_name ("process-stop-symbolic");
-            cancel_btn.add_css_class ("flat");
-            cancel_btn.add_css_class ("circular");
-            cancel_btn.tooltip_text = "Cancel";
-            cancel_btn.halign       = Gtk.Align.END;
+            var done_lbl = new Gtk.Label ("");
+            done_lbl.halign = Gtk.Align.START;
+            done_lbl.add_css_class ("caption");
+            done_lbl.add_css_class ("success");
+            status_stack.add_named (done_lbl, "done");
 
-            var top = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
-            top.append (name_lbl);
-            top.append (cancel_btn);
+            var fail_lbl = new Gtk.Label ("");
+            fail_lbl.halign = Gtk.Align.START;
+            fail_lbl.wrap   = true;
+            fail_lbl.add_css_class ("caption");
+            fail_lbl.add_css_class ("error");
+            status_stack.add_named (fail_lbl, "failed");
 
-            row_box.append (top);
-            row_box.append (model_lbl);
-            row_box.append (progress_bar);
+            var cancel_lbl = new Gtk.Label ("Cancelled");
+            cancel_lbl.halign = Gtk.Align.START;
+            cancel_lbl.add_css_class ("caption");
+            cancel_lbl.add_css_class ("dim-label");
+            status_stack.add_named (cancel_lbl, "cancelled");
+
+            status_stack.visible_child_name = "running";
+            row_box.append (status_stack);
 
             var row = new Gtk.ListBoxRow ();
             row.activatable = false;
             row.selectable  = false;
-            row.child = row_box;
+            row.child       = row_box;
             downloads_list.append (row);
 
-            // Update progress
-            task.notify["downloaded"].connect (() => {
-                Idle.add (() => {
-                    progress_bar.fraction = task.get_progress ();
-                    progress_bar.text     = task.format_progress ();
-                    return false;
-                });
+            // ── Progress updates ─────────────────────────────────────────
+            group.progress_changed.connect (() => {
+                progress_bar.fraction = group.get_progress ();
+                progress_bar.text     = group.format_progress ();
             });
 
-            task.notify["completed"].connect (() => {
-                Idle.add (() => {
-                    progress_bar.fraction = 1.0;
-                    progress_bar.text     = "Complete";
-                    cancel_btn.sensitive  = false;
-                    model_manager.add_model_path (task.dest_path);
-                    show_toast ("Downloaded " + task.filename);
-                    active_count--;
-                    active_count_changed (active_count);
-                    upsert_history (task.model_id, task.filename, task.dest_path,
-                                    "complete", task.total_size, null);
-                    return false;
-                });
-            });
-
-            task.notify["failed"].connect (() => {
-                Idle.add (() => {
-                    progress_bar.text    = "Failed: " + (task.error_msg ?? "Unknown error");
-                    cancel_btn.sensitive = false;
-                    active_count--;
-                    active_count_changed (active_count);
-                    upsert_history (task.model_id, task.filename, task.dest_path,
-                                    "failed", task.total_size, task.error_msg);
-                    return false;
-                });
-            });
-
-            cancel_btn.clicked.connect (() => {
-                task.cancel ();
-                cancel_btn.sensitive = false;
-                progress_bar.text    = "Cancelled";
+            // ── Terminal state ───────────────────────────────────────────
+            group.all_finished.connect (() => {
                 active_count--;
                 active_count_changed (active_count);
-                upsert_history (task.model_id, task.filename, task.dest_path,
-                                "cancelled", task.total_size, null);
+
+                if (group.is_all_completed ()) {
+                    done_lbl.label = "✓ Complete  " + group.format_total_size ();
+                    status_stack.visible_child_name = "done";
+                    action_btn.visible = false;
+                    show_toast ("Downloaded " + group.display_name);
+                    foreach (var t in group.tasks)
+                        model_manager.add_model_path (t.dest_path);
+                    foreach (var t in group.tasks)
+                        upsert_history (group.model_id, t.filename, t.dest_path,
+                                        "complete", t.total_size, null);
+
+                } else if (group.has_failures ()) {
+                    fail_lbl.label = "✗ Failed: " + (group.first_error () ?? "unknown error");
+                    status_stack.visible_child_name = "failed";
+                    action_btn.icon_name    = "view-refresh-symbolic";
+                    action_btn.tooltip_text = "Retry";
+                    foreach (var t in group.tasks)
+                        upsert_history (group.model_id, t.filename, t.dest_path,
+                                        t.failed ? "failed" : (t.cancelled ? "cancelled" : "complete"),
+                                        t.total_size, t.error_msg);
+
+                } else {
+                    // All cancelled (no failures)
+                    status_stack.visible_child_name = "cancelled";
+                    action_btn.icon_name    = "view-refresh-symbolic";
+                    action_btn.tooltip_text = "Restart";
+                    foreach (var fname in group.filenames)
+                        upsert_history (group.model_id, fname,
+                                        GLib.Path.build_filename (group.dest_dir, fname),
+                                        "cancelled", 0, null);
+                }
             });
+
+            // ── Action button (Cancel / Retry / Restart) ─────────────────
+            action_btn.clicked.connect (() => {
+                if (status_stack.visible_child_name == "running") {
+                    group.cancel_all ();
+                } else {
+                    retry_group (group, status_stack, progress_bar, action_btn);
+                }
+            });
+        }
+
+        // Resets a finished group back to running state and re-launches all downloads.
+        private void retry_group (HuggingFace.DownloadGroup group,
+                                  Gtk.Stack         status_stack,
+                                  Gtk.ProgressBar   progress_bar,
+                                  Gtk.Button        action_btn) {
+            group.cancel_all ();
+            group.clear_tasks ();
+
+            progress_bar.fraction = 0.0;
+            progress_bar.text     = "Starting…";
+            status_stack.visible_child_name = "running";
+            action_btn.icon_name    = "process-stop-symbolic";
+            action_btn.tooltip_text = "Cancel";
+            action_btn.visible      = true;
+
+            active_count++;
+            active_count_changed (active_count);
+
+            launch_group_downloads (group);
         }
 
         /* ── Persistent history ──────────────────────────────────────── */
@@ -657,18 +713,26 @@ namespace LLMStudio.UI {
                     history.append (rec);
 
                     if (rec.status == "in_progress" && rec.dest_path != "") {
-                        /* Resume the interrupted download automatically. */
+                        /* Resume the interrupted download in a single-file group. */
                         var dest_dir = GLib.Path.get_dirname (rec.dest_path);
+                        var grp = new HuggingFace.DownloadGroup ();
+                        grp.model_id     = rec.model_id;
+                        grp.model_repo   = rec.model_id;
+                        grp.display_name = rec.filename;
+                        grp.dest_dir     = dest_dir;
+                        grp.filenames.append (rec.filename);
+                        active_groups.append (grp);
                         hf_client.download_file.begin (rec.model_id, rec.filename, dest_dir,
                             (obj2, res) => {
                                 try {
                                     var task = hf_client.download_file.end (res);
-                                    active_downloads.append (task);
-                                    add_download_row (task);
+                                    grp.add_task (task);
+                                    add_download_group_row (grp);
                                 } catch (Error e) {
                                     warning ("Resume failed for %s: %s", rec.filename, e.message);
                                     upsert_history (rec.model_id, rec.filename, rec.dest_path,
                                                     "failed", rec.total_size, e.message);
+                                    active_groups.remove (grp);
                                     add_history_row (rec);
                                 }
                             });
@@ -688,7 +752,17 @@ namespace LLMStudio.UI {
             row_box.margin_start  = 14;
             row_box.margin_end    = 14;
 
-            var name_lbl = new Gtk.Label (rec.filename);
+            // Show clean name (strip part suffix; part info not needed in history)
+            string hist_name = rec.filename;
+            int pnum = ModelInfo.part_number (rec.filename);
+            int ptot = ModelInfo.part_total (rec.filename);
+            if (pnum > 0 && ptot > 1) {
+                string stem = hist_name.has_suffix (".gguf")
+                    ? hist_name.substring (0, hist_name.length - 5) : hist_name;
+                hist_name = ModelInfo.strip_part_suffix (stem)
+                    + ".gguf [%d/%d]".printf (pnum, ptot);
+            }
+            var name_lbl = new Gtk.Label (hist_name);
             name_lbl.halign    = Gtk.Align.START;
             name_lbl.hexpand   = true;
             name_lbl.ellipsize = Pango.EllipsizeMode.MIDDLE;
@@ -728,10 +802,10 @@ namespace LLMStudio.UI {
         }
 
         private void clear_downloads () {
-            /* Cancel all active tasks. */
-            foreach (var task in active_downloads)
-                task.cancel ();
-            active_downloads = new GLib.List<HuggingFace.DownloadTask> ();
+            /* Cancel all active groups. */
+            foreach (var grp in active_groups)
+                grp.cancel_all ();
+            active_groups = new GLib.List<HuggingFace.DownloadGroup> ();
 
             /* Clear the UI list. */
             var child = downloads_list.get_first_child ();

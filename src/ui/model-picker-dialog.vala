@@ -28,7 +28,9 @@ namespace LLMStudio.UI {
         private Adw.SpinRow   ctx_row;
         private Adw.SpinRow   batch_row;
         private Adw.SpinRow   ubatch_row;
-        private Adw.SpinRow   gpu_layers_row;
+        private Gtk.Scale     gpu_layers_scale;
+        private Gtk.Label     gpu_layers_val_lbl;
+        private int           gpu_layers_max = 200;
         private Adw.SpinRow   threads_row;
         private Adw.SwitchRow flash_attn_row;
         private Adw.SwitchRow mmap_row;
@@ -311,12 +313,51 @@ namespace LLMStudio.UI {
             var hw_group = new Adw.PreferencesGroup ();
             hw_group.title = "Hardware Acceleration";
             content_box.append (hw_group);
-            gpu_layers_row = make_spin_row ("GPU Layers",   "Number of model layers to offload to GPU (-1 = all)", -1, 999, -1, 1);
+
+            // GPU Layers slider (range updated in show_load_page)
+            var gpu_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 4);
+            gpu_box.margin_top    = 10;
+            gpu_box.margin_bottom = 8;
+            gpu_box.margin_start  = 12;
+            gpu_box.margin_end    = 12;
+
+            var gpu_header = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            var gpu_title_lbl = new Gtk.Label ("GPU Layers");
+            gpu_title_lbl.halign  = Gtk.Align.START;
+            gpu_title_lbl.hexpand = true;
+            gpu_layers_val_lbl = new Gtk.Label ("");
+            gpu_layers_val_lbl.add_css_class ("dim-label");
+            gpu_header.append (gpu_title_lbl);
+            gpu_header.append (gpu_layers_val_lbl);
+
+            var gpu_sub_lbl = new Gtk.Label ("Transformer layers to offload to GPU");
+            gpu_sub_lbl.halign = Gtk.Align.START;
+            gpu_sub_lbl.add_css_class ("dim-label");
+            gpu_sub_lbl.add_css_class ("caption");
+
+            gpu_layers_scale = new Gtk.Scale.with_range (Gtk.Orientation.HORIZONTAL, 0, gpu_layers_max, 1);
+            gpu_layers_scale.hexpand    = true;
+            gpu_layers_scale.draw_value = false;
+            gpu_layers_scale.add_mark (0,              Gtk.PositionType.BOTTOM, "CPU only");
+            gpu_layers_scale.add_mark (gpu_layers_max, Gtk.PositionType.BOTTOM, "All");
+            gpu_layers_scale.set_value (gpu_layers_max);
+            update_gpu_layers_label (gpu_layers_max);
+            gpu_layers_scale.value_changed.connect (() =>
+                update_gpu_layers_label ((int) gpu_layers_scale.get_value ()));
+
+            gpu_box.append (gpu_header);
+            gpu_box.append (gpu_sub_lbl);
+            gpu_box.append (gpu_layers_scale);
+            var gpu_row = new Adw.PreferencesRow ();
+            gpu_row.activatable = false;
+            gpu_row.focusable   = false;
+            gpu_row.set_child (gpu_box);
+            hw_group.add (gpu_row);
+
             threads_row    = make_spin_row ("CPU Threads",  "Number of CPU threads to use (-1 = auto)",            -1, 256, -1, 1);
             flash_attn_row = make_switch_row ("Flash Attention", "Use flash attention for faster inference",        true);
             mmap_row       = make_switch_row ("Memory Map",      "Use memory-mapped file I/O for model weights",   true);
             mlock_row      = make_switch_row ("Memory Lock",     "Lock model weights in RAM (prevents swapping)",  false);
-            hw_group.add (gpu_layers_row);
             hw_group.add (threads_row);
             hw_group.add (flash_attn_row);
             hw_group.add (mmap_row);
@@ -414,11 +455,30 @@ namespace LLMStudio.UI {
             for (uint i = 0; i < meta_parts.length; i++) parts_arr += meta_parts.index (i);
             load_meta_lbl.label = string.joinv ("  ·  ", parts_arr);
 
+            // Update GPU layers slider for this model
+            gpu_layers_max = model.block_count > 0 ? model.block_count : 200;
+            gpu_layers_scale.set_range (0, gpu_layers_max);
+            gpu_layers_scale.clear_marks ();
+            gpu_layers_scale.add_mark (0,              Gtk.PositionType.BOTTOM, "CPU only");
+            gpu_layers_scale.add_mark (gpu_layers_max, Gtk.PositionType.BOTTOM, "All");
+            // Suggested layers based on VRAM
+            int64 vram = ModelLoadDialog.probe_vram ();
+            if (vram > 0 && gpu_layers_max > 0 && model.size > 0) {
+                int64 bpl = model.size / gpu_layers_max;
+                if (bpl > 0) {
+                    int sug = (int)((int64)(vram * 0.85) / bpl);
+                    if (sug > 0 && sug < gpu_layers_max)
+                        gpu_layers_scale.add_mark (sug, Gtk.PositionType.BOTTOM, "Suggested");
+                }
+            }
+
             var p = pending_params;
-            ctx_row.value         = p.context_length;
-            batch_row.value       = p.batch_size;
-            ubatch_row.value      = p.ubatch_size;
-            gpu_layers_row.value  = p.gpu_layers;
+            ctx_row.value   = p.context_length;
+            batch_row.value = p.batch_size;
+            ubatch_row.value = p.ubatch_size;
+            int init_gpu = p.gpu_layers < 0 ? gpu_layers_max : p.gpu_layers.clamp (0, gpu_layers_max);
+            gpu_layers_scale.set_value (init_gpu);
+            update_gpu_layers_label (init_gpu);
             threads_row.value     = p.cpu_threads;
             flash_attn_row.active = p.flash_attention;
             mmap_row.active       = p.mmap;
@@ -456,7 +516,8 @@ namespace LLMStudio.UI {
             pending_params.context_length    = (int) ctx_row.get_value ();
             pending_params.batch_size        = (int) batch_row.get_value ();
             pending_params.ubatch_size       = (int) ubatch_row.get_value ();
-            pending_params.gpu_layers        = (int) gpu_layers_row.get_value ();
+            int gl = (int) gpu_layers_scale.get_value ();
+            pending_params.gpu_layers        = (gl >= gpu_layers_max) ? -1 : gl;
             pending_params.cpu_threads       = (int) threads_row.get_value ();
             pending_params.flash_attention   = flash_attn_row.active;
             pending_params.mmap              = mmap_row.active;
@@ -487,6 +548,15 @@ namespace LLMStudio.UI {
 
             load_requested (pending_model, pending_params);
             close ();
+        }
+
+        private void update_gpu_layers_label (int v) {
+            if (v == 0)
+                gpu_layers_val_lbl.label = "CPU only";
+            else if (v >= gpu_layers_max)
+                gpu_layers_val_lbl.label = "All %d layers".printf (gpu_layers_max);
+            else
+                gpu_layers_val_lbl.label = "%d / %d layers".printf (v, gpu_layers_max);
         }
 
         // ── Form helpers ─────────────────────────────────────────────

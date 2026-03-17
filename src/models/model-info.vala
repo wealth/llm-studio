@@ -170,6 +170,7 @@ namespace LLMStudio {
         public string?     family     { get; set; default = null; }
         public int64       parameters { get; set; default = 0;    }  // e.g. 7_000_000_000
         public string      gguf_quant { get; set; default = "";   }  // from GGUF file_type header
+        public int         block_count  { get; set; default = 0;   }  // transformer layer count
         public bool        has_vision   { get; set; default = false; }
         public bool        has_tools    { get; set; default = false; }
         public bool        has_thinking { get; set; default = false; }
@@ -195,11 +196,12 @@ namespace LLMStudio {
             return "%.0fM".printf (m);
         }
 
-        // Filename without extension, for display
+        // Filename without extension (and without part suffix), for display
         public string display_name () {
-            if (name.has_suffix (".gguf"))        return name.substring (0, name.length - 5);
-            if (name.has_suffix (".safetensors")) return name.substring (0, name.length - 12);
-            return name;
+            string n = name;
+            if (n.has_suffix (".gguf"))        n = n.substring (0, n.length - 5);
+            if (n.has_suffix (".safetensors")) n = n.substring (0, n.length - 12);
+            return strip_part_suffix (n);
         }
 
         // Model name stripped of quantization, -GGUF suffix, and extension.
@@ -213,6 +215,7 @@ namespace LLMStudio {
                 stem = GLib.Path.get_basename (path);
                 if (stem.has_suffix (".gguf"))        stem = stem.substring (0, stem.length - 5);
                 if (stem.has_suffix (".safetensors")) stem = stem.substring (0, stem.length - 12);
+                stem = strip_part_suffix (stem);
             }
             // Strip -GGUF suffix (case-insensitive)
             if (stem.length > 5 && stem.substring (stem.length - 5).ascii_up () == "-GGUF")
@@ -235,6 +238,11 @@ namespace LLMStudio {
             var stem = GLib.Path.get_basename (path);
             if (stem.has_suffix (".gguf"))        stem = stem.substring (0, stem.length - 5);
             if (stem.has_suffix (".safetensors")) stem = stem.substring (0, stem.length - 12);
+            return extract_quant_from_stem (stem);
+        }
+
+        // Filename-based quant extraction (no GGUF header lookup).
+        public static string extract_quant_from_stem (string stem) {
             foreach (unowned string part in stem.split_set ("-.")) {
                 string up = part.ascii_up ();
                 if (up == "BF16" || up == "F16" || up == "F32" || up == "FP16" || up == "FP32")
@@ -248,6 +256,68 @@ namespace LLMStudio {
                     return up;
             }
             return "";
+        }
+
+        /* ── Multi-part file helpers ───────────────────────────────────── */
+
+        private static GLib.Regex? _part_re = null;
+
+        private static GLib.Regex? get_part_re () {
+            if (_part_re == null) {
+                try {
+                    _part_re = new GLib.Regex ("-([0-9]+)-of-([0-9]+)$", 0, 0);
+                } catch (GLib.RegexError e) {
+                    warning ("part regex: %s", e.message);
+                }
+            }
+            return _part_re;
+        }
+
+        // Returns 1-based part number, or 0 if not a multi-part filename.
+        public static int part_number (string filename) {
+            string stem = filename.has_suffix (".gguf")
+                ? filename.substring (0, filename.length - 5) : filename;
+            var re = get_part_re ();
+            if (re == null) return 0;
+            GLib.MatchInfo mi;
+            if (!re.match (stem, 0, out mi)) return 0;
+            return int.parse (mi.fetch (1));
+        }
+
+        // Returns total part count, or 0 if not a multi-part filename.
+        public static int part_total (string filename) {
+            string stem = filename.has_suffix (".gguf")
+                ? filename.substring (0, filename.length - 5) : filename;
+            var re = get_part_re ();
+            if (re == null) return 0;
+            GLib.MatchInfo mi;
+            if (!re.match (stem, 0, out mi)) return 0;
+            return int.parse (mi.fetch (2));
+        }
+
+        // Strips -NNNNN-of-MMMMM from a stem (no extension expected).
+        public static string strip_part_suffix (string stem) {
+            var re = get_part_re ();
+            if (re == null) return stem;
+            GLib.MatchInfo mi;
+            if (!re.match (stem, 0, out mi)) return stem;
+            int start, end;
+            mi.fetch_pos (0, out start, out end);
+            return stem.substring (0, start);
+        }
+
+        // For a non-first part, returns the path of part 1; null otherwise.
+        public static string? part1_path (string filepath) {
+            string basename = GLib.Path.get_basename (filepath);
+            int pnum = part_number (basename);
+            if (pnum <= 1) return null;
+            int total = part_total (basename);
+            if (total <= 0) return null;
+            string dir  = GLib.Path.get_dirname (filepath);
+            string stem = basename.has_suffix (".gguf")
+                ? basename.substring (0, basename.length - 5) : basename;
+            string base_name = strip_part_suffix (stem);
+            return GLib.Path.build_filename (dir, "%s-00001-of-%05d.gguf".printf (base_name, total));
         }
 
         // HuggingFace publisher (first component of hf_repo before '/')
@@ -340,6 +410,25 @@ namespace LLMStudio {
             // Read GGUF metadata (architecture, parameter count, quantization)
             if (m.format == ModelFormat.GGUF)
                 GgufReader.read_metadata (filepath, m);
+
+            // For multi-part files (part 1 only), accumulate total size across all parts.
+            if (m.format == ModelFormat.GGUF && part_number (m.name) == 1) {
+                int total = part_total (m.name);
+                if (total > 1) {
+                    string dir  = GLib.Path.get_dirname (filepath);
+                    string stem = m.name.substring (0, m.name.length - 5);  // strip .gguf
+                    string base_name = strip_part_suffix (stem);
+                    for (int n = 2; n <= total; n++) {
+                        string part_name = "%s-%05d-of-%05d.gguf".printf (base_name, n, total);
+                        string part_path = GLib.Path.build_filename (dir, part_name);
+                        try {
+                            var pf   = GLib.File.new_for_path (part_path);
+                            var pfi  = pf.query_info ("standard::size", GLib.FileQueryInfoFlags.NONE);
+                            m.size  += pfi.get_size ();
+                        } catch { /* part not yet downloaded */ }
+                    }
+                }
+            }
 
             // Detect vision capability from mmproj sidecar file.
             // Many models (Qwen3.5-VL, LLaVA, …) store vision weights in a

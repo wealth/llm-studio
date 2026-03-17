@@ -106,6 +106,7 @@ namespace LLMStudio {
                     if (fmt == ModelFormat.UNKNOWN) continue;
                     if (name.has_suffix (".llmstudio.json")) continue;
                     if (name.down ().has_prefix ("mmproj")) continue;  // vision projection sidecar
+                    if (ModelInfo.part_number (name) > 1) continue;    // non-first part of split model
 
                     scan_buffer.append (ModelInfo.from_file (full_path));
                 }
@@ -113,13 +114,38 @@ namespace LLMStudio {
         }
 
         public void add_model_path (string path) {
-            if (GLib.Path.get_basename (path).down ().has_prefix ("mmproj")) return;
+            string basename = GLib.Path.get_basename (path);
+            if (basename.down ().has_prefix ("mmproj")) return;
+
+            // Non-first parts of a multi-part model: refresh part 1's entry so its
+            // total size gets updated (part 2..N were just downloaded).
+            if (ModelInfo.part_number (basename) > 1) {
+                string? p1 = ModelInfo.part1_path (path);
+                if (p1 != null) refresh_model_path (p1);
+                return;
+            }
+
             for (uint i = 0; i < _models.get_n_items (); i++) {
                 if (((ModelInfo) _models.get_item (i)).path == path) return;
             }
             var model = ModelInfo.from_file (path);
             _models.append (model);
             model_added (model);
+        }
+
+        // Re-reads model metadata from disk and replaces the existing entry.
+        public void refresh_model_path (string path) {
+            for (uint i = 0; i < _models.get_n_items (); i++) {
+                var m = (ModelInfo) _models.get_item (i);
+                if (m.path == path) {
+                    var updated = ModelInfo.from_file (path);
+                    _models.remove (i);
+                    _models.insert (i, updated);
+                    return;
+                }
+            }
+            // Not yet tracked: add it (e.g. part 1 finishes after part 2 due to race)
+            add_model_path (path);
         }
 
         public void remove_model (ModelInfo model) {

@@ -16,7 +16,8 @@
       "Bash(find ~/.local/share ~/.cache -name \"*.gguf\" 2>/dev/null | grep -i \"9b\\\\|9B\" | head -10)",
       "Bash(find ~/.local/share ~/.cache -name \"*.gguf\" 2>/dev/null | grep -i \"lmstudio\" | head -10)",
       "Bash(python3 -c \"\ncases = ['qwen2vl', 'qwen3vl', 'qwen2_vl', 'qwen3_vl', 'llava', 'qwen2', 'qwen3', 'gemma3', 'moondream']\nfor fam in cases:\n    old = fam.endswith\\('_vl'\\) or fam == 'qwen2_vl' or 'llava' in fam or 'vision' in fam or 'intern_vl' in fam or 'minicpm' in fam\n    new = \\('llava' in fam or 'vision' in fam or fam.endswith\\('_vl'\\) or fam.endswith\\('vl'\\)\n           or 'intern_vl' in fam or 'minicpm' in fam or 'moondream' in fam or 'phi3v' in fam or 'gemma3' in fam\\)\n    print\\(f'{fam:20s}  old={old}  new={new}'\\)\n\")",
-      "Bash(gsettings get:*)"
+      "Bash(gsettings get:*)",
+      "Read(//home/dima/dev/llm-studio2/**)"
     ]
   }
 }
