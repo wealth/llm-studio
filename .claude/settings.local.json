@@ -17,7 +17,10 @@
       "Bash(find ~/.local/share ~/.cache -name \"*.gguf\" 2>/dev/null | grep -i \"lmstudio\" | head -10)",
       "Bash(python3 -c \"\ncases = ['qwen2vl', 'qwen3vl', 'qwen2_vl', 'qwen3_vl', 'llava', 'qwen2', 'qwen3', 'gemma3', 'moondream']\nfor fam in cases:\n    old = fam.endswith\\('_vl'\\) or fam == 'qwen2_vl' or 'llava' in fam or 'vision' in fam or 'intern_vl' in fam or 'minicpm' in fam\n    new = \\('llava' in fam or 'vision' in fam or fam.endswith\\('_vl'\\) or fam.endswith\\('vl'\\)\n           or 'intern_vl' in fam or 'minicpm' in fam or 'moondream' in fam or 'phi3v' in fam or 'gemma3' in fam\\)\n    print\\(f'{fam:20s}  old={old}  new={new}'\\)\n\")",
       "Bash(gsettings get:*)",
-      "Read(//home/dima/dev/llm-studio2/**)"
+      "Read(//home/dima/dev/llm-studio2/**)",
+      "Bash(curl -s -L \"https://lite.duckduckgo.com/lite/?q=python+language\" -H \"User-Agent: Mozilla/5.0 \\(X11; Linux x86_64; rv:120.0\\) Gecko/20100101 Firefox/120.0\" 2>&1 | head -100)",
+      "Bash(cp data/dev.llmstudio.LLMStudio.gschema.xml ~/.local/share/glib-2.0/schemas/)",
+      "Bash(glib-compile-schemas ~/.local/share/glib-2.0/schemas/)"
     ]
   }
 }

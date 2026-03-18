@@ -289,13 +289,14 @@ namespace LLMStudio {
             Json.Array messages,
             ModelParams params,
             owned CompletionChunkCallback callback,
-            GLib.Cancellable? cancel = null
+            GLib.Cancellable? cancel = null,
+            Json.Array? tools = null
         ) throws Error {
             if (status != BackendStatus.READY)
                 throw new IOError.NOT_CONNECTED ("No model loaded");
 
             var gen = new Json.Generator ();
-            gen.set_root (make_chat_request_body (messages, params, true));
+            gen.set_root (make_chat_request_body (messages, params, true, tools));
             var msg = new Soup.Message ("POST",
                 "http://127.0.0.1:%d/v1/chat/completions".printf (port));
             msg.set_request_body_from_bytes ("application/json", new GLib.Bytes (gen.to_data (null).data));

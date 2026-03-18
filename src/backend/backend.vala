@@ -73,6 +73,9 @@ namespace LLMStudio {
         private bool _in_reasoning = false;
         /* Tracks whether reasoning_content was used at all during this stream. */
         private bool _had_reasoning = false;
+        /* JSON string of accumulated tool_calls when finish_reason=="tool_calls". */
+        protected string? _pending_tool_call_json = null;
+        public string? pending_tool_call_json { get { return _pending_tool_call_json; } }
 
         public signal void status_changed (BackendStatus status);
         public signal void log_message    (string line, bool is_error);
@@ -97,7 +100,8 @@ namespace LLMStudio {
             Json.Array   messages,
             ModelParams  params,
             owned CompletionChunkCallback callback,
-            GLib.Cancellable? cancel = null
+            GLib.Cancellable? cancel = null,
+            Json.Array? tools = null
         ) throws Error;
 
         // For the API server to know which port the backend server is on
@@ -179,14 +183,27 @@ namespace LLMStudio {
             return arr;
         }
 
-        // Parse SSE stream into chunks
+        // Parse SSE stream into chunks, handling tool_calls finish_reason.
         protected async void parse_sse_stream (
             GLib.InputStream     istream,
             owned CompletionChunkCallback callback,
             GLib.Cancellable?    cancel = null
         ) throws Error {
-            _in_reasoning = false;
-            _had_reasoning = false;
+            _in_reasoning          = false;
+            _had_reasoning         = false;
+            _pending_tool_call_json = null;
+
+            // Tool-call accumulators (up to 8 parallel tool calls)
+            string[] tc_ids   = new string[8];
+            string[] tc_names = new string[8];
+            StringBuilder[] tc_args = new StringBuilder[8];
+            int tc_max_idx = -1;
+            for (int i = 0; i < 8; i++) {
+                tc_ids[i]   = "";
+                tc_names[i] = "";
+                tc_args[i]  = new StringBuilder ();
+            }
+
             var ds = new GLib.DataInputStream (istream);
             string? line;
             while ((line = yield ds.read_line_async (GLib.Priority.DEFAULT, cancel)) != null) {
@@ -220,9 +237,7 @@ namespace LLMStudio {
                     if (choice.has_member ("delta")) {
                         var delta = choice.get_object_member ("delta");
 
-                        /* reasoning_content: used by Qwen3/DeepSeek-R1 and some servers
-                           to deliver thinking tokens separately from the main content.
-                           We synthesise <think> tags so update_streaming handles it normally. */
+                        /* reasoning_content: used by Qwen3/DeepSeek-R1 and some servers. */
                         if (delta.has_member ("reasoning_content") &&
                             delta.get_member ("reasoning_content").get_node_type () == Json.NodeType.VALUE) {
                             var rc = delta.get_string_member ("reasoning_content");
@@ -244,18 +259,60 @@ namespace LLMStudio {
                                 _in_reasoning = false;
                             }
                             if (content != null && content.length > 0) {
-                                /* Strip <think>/<​/think> tags from content if reasoning_content
-                                   was used — llama-cpp may echo them in both fields. */
-                                if (_had_reasoning) {
+                                if (_had_reasoning)
                                     content = content.replace ("<think>", "").replace ("</think>", "");
+                                if (content.length > 0) {
+                                    // Don't mark done for tool_calls — handled below
+                                    bool is_final = finish_reason != null && finish_reason != "tool_calls";
+                                    callback (content, is_final, is_final ? finish_reason : null);
                                 }
-                                if (content.length > 0)
-                                    callback (content, finish_reason != null, finish_reason);
-                                else if (finish_reason != null)
-                                    callback ("", true, finish_reason);
-                            } else if (finish_reason != null)
+                            } else if (finish_reason != null && finish_reason != "tool_calls") {
                                 callback ("", true, finish_reason);
+                            }
                         }
+
+                        /* Accumulate tool_calls delta fragments. */
+                        if (delta.has_member ("tool_calls")) {
+                            var tca = delta.get_array_member ("tool_calls");
+                            for (int ti = 0; ti < (int) tca.get_length (); ti++) {
+                                var tc = tca.get_object_element (ti);
+                                int idx = tc.has_member ("index")
+                                    ? (int) tc.get_int_member ("index") : ti;
+                                if (idx < 0 || idx >= 8) continue;
+                                if (idx > tc_max_idx) tc_max_idx = idx;
+                                if (tc.has_member ("id"))
+                                    tc_ids[idx] = tc.get_string_member ("id");
+                                if (tc.has_member ("function")) {
+                                    var fn = tc.get_object_member ("function");
+                                    if (fn.has_member ("name"))
+                                        tc_names[idx] = fn.get_string_member ("name");
+                                    if (fn.has_member ("arguments"))
+                                        tc_args[idx].append (fn.get_string_member ("arguments"));
+                                }
+                            }
+                        }
+                    }
+
+                    /* Finalize tool calls when the model signals it's done calling tools. */
+                    if (finish_reason == "tool_calls" && tc_max_idx >= 0) {
+                        var b = new Json.Builder ();
+                        b.begin_array ();
+                        for (int i = 0; i <= tc_max_idx; i++) {
+                            if (tc_names[i] == "") continue;
+                            b.begin_object ();
+                            b.set_member_name ("id");
+                            b.add_string_value (tc_ids[i] != "" ? tc_ids[i]
+                                                                 : "call_%d".printf (i));
+                            b.set_member_name ("name");      b.add_string_value (tc_names[i]);
+                            b.set_member_name ("arguments"); b.add_string_value (tc_args[i].str);
+                            b.end_object ();
+                        }
+                        b.end_array ();
+                        var gen = new Json.Generator ();
+                        gen.set_root (b.get_root ());
+                        _pending_tool_call_json = gen.to_data (null);
+                        callback ("", true, "tool_calls");
+                        break;
                     }
                 } catch (Error e) {
                     // Malformed chunk - skip
@@ -264,7 +321,8 @@ namespace LLMStudio {
         }
 
         // Helper: make a JSON request body node for chat completions
-        protected Json.Node make_chat_request_body (Json.Array messages, ModelParams params, bool stream) {
+        protected Json.Node make_chat_request_body (Json.Array messages, ModelParams params, bool stream,
+                                                     Json.Array? tools = null) {
             var builder = new Json.Builder ();
             builder.begin_object ();
             var arr_node = new Json.Node (Json.NodeType.ARRAY);
@@ -296,6 +354,14 @@ namespace LLMStudio {
             builder.set_member_name ("enable_thinking");
             builder.add_boolean_value (params.enable_thinking);
             builder.end_object ();
+            if (tools != null && tools.get_length () > 0) {
+                var tools_node = new Json.Node (Json.NodeType.ARRAY);
+                tools_node.set_array (tools);
+                builder.set_member_name ("tools");
+                builder.add_value (tools_node);
+                builder.set_member_name ("tool_choice");
+                builder.add_string_value ("auto");
+            }
             builder.end_object ();
             return builder.get_root ();
         }

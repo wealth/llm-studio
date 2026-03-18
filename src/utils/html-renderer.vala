@@ -72,7 +72,7 @@ namespace LLMStudio {
             int id = 0;
             foreach (var msg in messages) {
                 if (msg.role == "user") {
-                    sb.append (user_html (msg.content, msg.attachments));
+                    sb.append (user_html (id, msg.content, msg.attachments));
                 } else if (msg.role == "assistant") {
                     string name = msg.model_name != "" ? msg.model_name : model_name;
                     sb.append (assistant_html (id, msg.content, name, msg.stats_text));
@@ -86,11 +86,13 @@ namespace LLMStudio {
 
         /* ── Private HTML builders ───────────────────────────────────── */
 
-        private static string user_html (string text,
+        private static string user_html (int idx, string text,
                                          GLib.List<ChatAttachment>? attachments = null)
         {
             var sb = new StringBuilder ();
-            sb.append ("<div class=\"user-row\"><div class=\"user-col\">");
+            sb.append ("<div class=\"user-row\" id=\"u-");
+            sb.append (idx.to_string ());
+            sb.append ("\"><div class=\"user-col\">");
 
             if (attachments != null) {
                 foreach (var att in attachments) {
@@ -109,10 +111,17 @@ namespace LLMStudio {
             }
 
             if (text != "") {
-                sb.append ("<div class=\"user-bubble\">");
+                sb.append ("<div class=\"user-bubble\" data-raw=\"");
                 sb.append (html_esc (text));
+                sb.append ("\">");
+                sb.append (render_markdown (text));
                 sb.append ("</div>");
             }
+
+            sb.append ("<div class=\"user-actions\">");
+            sb.append ("<button onclick=\"llmCopyUser(%d)\">Copy</button>".printf (idx));
+            sb.append ("<button onclick=\"llmDeleteExchange(%d)\">Delete</button>".printf (idx));
+            sb.append ("</div>");
 
             sb.append ("</div></div>\n");
             return sb.str;
@@ -146,7 +155,7 @@ namespace LLMStudio {
             string sid       = "m%d".printf (id);
 
             var sb = new StringBuilder ();
-            sb.append ("<div class=\"asst-row\">");
+            sb.append ("<div class=\"asst-row\" id=\"row-" + sid + "\">");
             sb.append ("<div class=\"asst-name\">" + html_esc (model_name) + "</div>");
 
             if (think != "") {
@@ -165,6 +174,7 @@ namespace LLMStudio {
             sb.append ("<div class=\"asst-stats\">" + html_esc (stats_text) + "</div>");
             sb.append ("<div class=\"asst-actions\">" +
                        "<button onclick=\"llmCopy('" + sid + "')\">Copy</button>" +
+                       "<button onclick=\"llmDeleteExchange(%d)\">Delete</button>".printf (id) +
                        "</div>");
             sb.append ("</div>\n");
             return sb.str;
@@ -186,7 +196,9 @@ namespace LLMStudio {
 }}
 html,body{background:var(--bg);color:var(--fg);
   font-family:-apple-system,system-ui,Cantarell,sans-serif;
-  font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:break-word}
+  font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:break-word;
+  -webkit-user-select:text;user-select:text}
+.katex-error{color:inherit !important}
 body{padding:0}
 #chat{width:100%;max-width:1080px;margin:0 auto;padding:0 16px 24px;box-sizing:border-box}
 .user-row{display:flex;justify-content:flex-end;margin:8px 0 4px 80px}
@@ -194,11 +206,28 @@ body{padding:0}
 .user-bubble{background:var(--user-bg);color:var(--user-fg);
   border-radius:18px 18px 4px 18px;padding:10px 14px;
   white-space:pre-wrap;word-break:break-word;max-width:100%}
+.user-bubble p{margin:.4em 0;white-space:normal}
+.user-bubble p:first-child{margin-top:0}.user-bubble p:last-child{margin-bottom:0}
+.user-bubble ul,.user-bubble ol{padding-left:1.4em;margin:.3em 0;white-space:normal}
+.user-bubble li{margin:.1em 0}
+.user-bubble code{font-family:"JetBrains Mono","Fira Code","Cascadia Code",monospace;
+  font-size:.88em;background:rgba(255,255,255,.2);padding:1px 5px;border-radius:4px}
+.user-bubble pre{background:rgba(0,0,0,.25);border-radius:8px;padding:10px 12px;
+  overflow-x:auto;margin:.5em 0;white-space:normal}
+.user-bubble pre code{background:none;padding:0;font-size:.86em;white-space:pre}
+.user-bubble blockquote{border-left:3px solid rgba(255,255,255,.5);
+  margin:.5em 0;padding-left:10px;opacity:.85}
+.user-bubble a{color:rgba(255,255,255,.9)}
 .att-img{max-width:320px;max-height:220px;border-radius:12px;object-fit:contain;display:block}
 .att-chip{background:rgba(28,113,216,.15);color:var(--fg);border-radius:10px;
   padding:4px 10px;font-size:12px}
 .asst-row{margin:16px 0 8px}
 .asst-name{font-size:11px;color:var(--dim);font-weight:500;margin-bottom:6px}
+details.tool-call{background:var(--think-bg);border:1px solid var(--border);
+  border-radius:8px;padding:2px 10px;margin-bottom:8px;font-size:12px;color:var(--dim)}
+details.tool-call summary{cursor:pointer;padding:4px 0}
+details.tool-call pre{font-size:11px;max-height:160px;overflow-y:auto;
+  white-space:pre-wrap;word-break:break-word;margin-top:4px}
 details.think{background:var(--think-bg);border:1px solid var(--border);
   border-radius:8px;padding:2px 10px;margin-bottom:10px;
   font-size:13px;color:var(--dim)}
@@ -232,6 +261,10 @@ details.think[open] summary{margin-bottom:4px}
 .asst-actions button{background:none;border:1px solid var(--border);
   border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;color:var(--fg)}
 .asst-actions button:hover{background:var(--code-bg)}
+.user-actions{display:flex;gap:4px;justify-content:flex-end;margin-top:4px}
+.user-actions button{background:none;border:1px solid rgba(255,255,255,.35);
+  border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;color:rgba(255,255,255,.85)}
+.user-actions button:hover{background:rgba(255,255,255,.15)}
 @keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
   background:var(--dim);animation:pulse 1.2s ease-in-out infinite;margin:2px}
@@ -254,24 +287,70 @@ function katexEl(el){
     try{renderMathInElement(el,KATEX_OPTS);}catch(e){console.error(e);}
   }
 }
+/* Normalise non-standard math delimiters to ones KaTeX understands.
+   Protects code blocks and already-valid math delimiters first, then:
+     ( \...  )  →  \( \... \)   inline
+     [ \...  ]  →  \[ \... \]   display                              */
+function normalizeMathDelimiters(html){
+  var saved=[];
+  function save(m){saved.push(m);return'\x01'+(saved.length-1)+'\x01';}
+  // Protect code blocks
+  html=html.replace(/<(pre|code)[\s\S]*?<\/\1>/gi,save);
+  // Protect existing valid math delimiters ($...$, $$...$$, \(...\), \[...\])
+  html=html.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+?\$/g,save);
+  html=html.replace(/\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g,save);
+  // Convert ( ... ) → \( ... \) and [ ... ] → \[ ... \] when content contains a backslash
+  html=html.replace(/\(\s*([^()]*\\[^()]*)\s*\)/g,'\\($1\\)');
+  html=html.replace(/\[\s*([^\[\]]*\\[^\[\]]*)\s*\]/g,'\\[$1\\]');
+  return html.replace(/\x01(\d+)\x01/g,function(_,i){return saved[+i];});
+}
 function llmRenderAll(){
   /* Render think-block placeholders from session-loaded messages. */
   document.querySelectorAll('[data-think-raw]').forEach(function(el){
     el.innerHTML=renderThinkText(el.dataset.thinkRaw);
     el.removeAttribute('data-think-raw');
   });
+  /* Normalise non-standard delimiters before KaTeX pass. */
+  document.querySelectorAll('.asst-content,.user-bubble').forEach(function(el){
+    el.innerHTML=normalizeMathDelimiters(el.innerHTML);
+  });
   katexEl(document.body);
 }
 function scrollBottom(){window.scrollTo(0,document.body.scrollHeight);}
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function llmClear(){document.getElementById('chat').innerHTML='';}
+function llmAddToolCall(id,display,result){
+  var row=document.getElementById('row-'+id);
+  if(!row)return;
+  var tc=document.createElement('details');
+  tc.className='tool-call';
+  tc.innerHTML='<summary>'+escHtml(display)+'</summary><pre>'+escHtml(result)+'</pre>';
+  var container=row.querySelector('.tool-calls');
+  if(container)container.appendChild(tc);
+  scrollBottom();
+}
 function llmCopy(id){
   var el=document.getElementById(id);
   if(el){navigator.clipboard.writeText(el.dataset.raw||el.textContent).catch(function(){});}
 }
-function llmAddUser(text,attsJson){
+function llmCopyUser(idx){
+  var row=document.getElementById('u-'+idx);
+  if(!row)return;
+  var bubble=row.querySelector('.user-bubble');
+  navigator.clipboard.writeText(bubble?bubble.dataset.raw||bubble.textContent:row.textContent).catch(function(){});
+}
+function llmDeleteExchange(idx){
+  var ur=document.getElementById('u-'+idx);
+  var ar=document.getElementById('row-m'+idx);
+  if(ur)ur.remove();
+  if(ar)ar.remove();
+  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.llm)
+    window.webkit.messageHandlers.llm.postMessage(JSON.stringify({action:'delete',index:idx}));
+}
+function llmAddUser(idx,text,attsJson){
   var d=document.createElement('div');
   d.className='user-row';
+  d.id='u-'+idx;
   var col=document.createElement('div');
   col.className='user-col';
   if(attsJson){try{
@@ -292,9 +371,16 @@ function llmAddUser(text,attsJson){
   }catch(e){}}
   if(text){
     var b=document.createElement('div');
-    b.className='user-bubble';b.textContent=text;
+    b.className='user-bubble';b.dataset.raw=b.dataset.raw||'';
+    b.innerHTML=normalizeMathDelimiters(text);
+    katexEl(b);
     col.appendChild(b);
   }
+  var acts=document.createElement('div');
+  acts.className='user-actions';
+  acts.innerHTML='<button onclick="llmCopyUser('+idx+')">Copy</button>'+
+                 '<button onclick="llmDeleteExchange('+idx+')">Delete</button>';
+  col.appendChild(acts);
   d.appendChild(col);
   document.getElementById('chat').appendChild(d);
   scrollBottom();
@@ -305,6 +391,7 @@ function llmStartAssistant(id,model){
   d.id='row-'+id;
   d.innerHTML=
     '<div class="asst-name">'+escHtml(model)+'</div>'+
+    '<div class="tool-calls"></div>'+
     '<div class="asst-content">'+
       '<div class="resp"><span class="dot"></span></div>'+
     '</div>'+
@@ -360,7 +447,6 @@ function llmSetContent(id,html){
   var resp=row.querySelector('.resp');
   if(!resp)return;
   resp.innerHTML=html;
-  katexEl(resp);
   scrollBottom();
 }
 function llmFinalize(id,thinkRaw,contentHtml,rawContent){
@@ -387,11 +473,16 @@ function llmFinalize(id,thinkRaw,contentHtml,rawContent){
   /* Update response div in-place. */
   var resp=row.querySelector('.resp');
   if(!resp){resp=document.createElement('div');resp.className='resp';el.appendChild(resp);}
-  resp.innerHTML=contentHtml;
+  resp.innerHTML=normalizeMathDelimiters(contentHtml);
   row.dataset.raw=rawContent;
   katexEl(el);
   var act=row.querySelector('.asst-actions');
-  if(act){act.style.display='';act.innerHTML='<button onclick="llmCopyRow(\''+id+'\')">Copy</button>';}
+  if(act){
+    act.style.display='';
+    var exIdx=parseInt(id.slice(1));
+    act.innerHTML='<button onclick="llmCopyRow(\''+id+'\')">Copy</button>'+
+                  '<button onclick="llmDeleteExchange('+exIdx+')">Delete</button>';
+  }
   scrollBottom();
 }
 function llmSetStats(id,text){

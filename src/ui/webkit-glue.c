@@ -79,6 +79,44 @@ void llm_webkit_load_html (GtkWidget *gw, const char *html, const char *base_uri
     webkit_web_view_load_html (wv, html, base_uri);
 }
 
+typedef struct {
+    LlmJsCallback cb;
+    gpointer      user_data;
+} MsgHandlerData;
+
+static void on_msg_received (WebKitUserContentManager *ucm,
+                              JSCValue                 *value,
+                              gpointer                  ud)
+{
+    (void) ucm;
+    MsgHandlerData *d = ud;
+    char *str = jsc_value_to_string (value);
+    if (str && d->cb)
+        d->cb (str, d->user_data);
+    g_free (str);
+}
+
+void llm_webkit_add_message_handler (GtkWidget     *gw,
+                                     const char    *name,
+                                     LlmJsCallback  cb,
+                                     gpointer       user_data)
+{
+    WebKitWebView            *wv  = WEBKIT_WEB_VIEW (gw);
+    WebKitUserContentManager *ucm = webkit_web_view_get_user_content_manager (wv);
+
+    MsgHandlerData *d = g_new (MsgHandlerData, 1);
+    d->cb        = cb;
+    d->user_data = user_data;
+
+    /* Connect BEFORE registering to avoid race conditions. */
+    char *signal = g_strdup_printf ("script-message-received::%s", name);
+    g_signal_connect_data (ucm, signal, G_CALLBACK (on_msg_received),
+                           d, (GClosureNotify) g_free, 0);
+    g_free (signal);
+
+    webkit_user_content_manager_register_script_message_handler (ucm, name, NULL);
+}
+
 void llm_webkit_run_js (GtkWidget *gw, const char *js)
 {
     WebKitWebView *wv = WEBKIT_WEB_VIEW (gw);

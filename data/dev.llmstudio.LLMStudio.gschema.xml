@@ -68,6 +68,16 @@
       <summary>Engine release tag the user chose to skip</summary>
     </key>
 
+    <!-- Tools -->
+    <key name="tool-duckduckgo-enabled" type="b">
+      <default>false</default>
+      <summary>Whether the DuckDuckGo search tool is enabled</summary>
+    </key>
+    <key name="tool-visit-website-enabled" type="b">
+      <default>false</default>
+      <summary>Whether the Visit Website tool is enabled</summary>
+    </key>
+
     <!-- API Server -->
     <key name="api-server-enabled" type="b">
       <default>false</default>

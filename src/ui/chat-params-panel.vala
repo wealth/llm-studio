@@ -2,6 +2,7 @@ namespace LLMStudio.UI {
 
     public class ChatParamsPanel : Gtk.Box {
         private BackendManager backend_manager;
+        private ToolManager    tool_manager;
         private ModelInfo?     current_model = null;
 
         private Gtk.Stack      content_stack;
@@ -21,9 +22,10 @@ namespace LLMStudio.UI {
 
         private bool       updating_ui = false;
 
-        public ChatParamsPanel (BackendManager bm) {
+        public ChatParamsPanel (BackendManager bm, ToolManager tm) {
             Object (orientation: Gtk.Orientation.VERTICAL, spacing: 0);
             this.backend_manager = bm;
+            this.tool_manager    = tm;
             build_ui ();
             backend_manager.model_loaded.connect (on_model_loaded);
             backend_manager.model_unloaded.connect (on_model_unloaded);
@@ -71,6 +73,7 @@ namespace LLMStudio.UI {
         // Returns a collapsible section: clickable header + Revealer wrapping content
         private Gtk.Box make_collapsible_section (string title, Gtk.Widget content, bool expanded = true) {
             var outer = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            outer.margin_bottom = 4;
 
             var header_btn = new Gtk.ToggleButton ();
             header_btn.active  = expanded;
@@ -78,8 +81,8 @@ namespace LLMStudio.UI {
             header_btn.add_css_class ("flat");
 
             var header_inner = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
-            header_inner.margin_top    = 2;
-            header_inner.margin_bottom = 2;
+            header_inner.margin_top    = 4;
+            header_inner.margin_bottom = 4;
 
             var lbl = new Gtk.Label (title);
             lbl.add_css_class ("heading");
@@ -92,11 +95,15 @@ namespace LLMStudio.UI {
             header_inner.append (chevron);
             header_btn.set_child (header_inner);
 
+            var content_wrap = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            content_wrap.margin_top = 6;
+            content_wrap.append (content);
+
             var revealer = new Gtk.Revealer ();
-            revealer.reveal_child      = expanded;
-            revealer.transition_type   = Gtk.RevealerTransitionType.SLIDE_DOWN;
+            revealer.reveal_child        = expanded;
+            revealer.transition_type     = Gtk.RevealerTransitionType.SLIDE_DOWN;
             revealer.transition_duration = 150;
-            revealer.set_child (content);
+            revealer.set_child (content_wrap);
 
             header_btn.toggled.connect (() => {
                 revealer.reveal_child = header_btn.active;
@@ -176,9 +183,6 @@ namespace LLMStudio.UI {
             sys_frame.append (sys_scroll);
             sys_content.append (sys_frame);
 
-            outer_box.append (make_collapsible_section ("System Prompt", sys_content, true));
-            outer_box.append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
-
             // ── Sampling section ───────────────────────────────────────────
             var samp_content = new Gtk.Box (Gtk.Orientation.VERTICAL, 10);
             samp_content.margin_start  = 6;
@@ -221,9 +225,6 @@ namespace LLMStudio.UI {
             });
             samp_content.append (rep_pen_row);
 
-            outer_box.append (make_collapsible_section ("Sampling", samp_content, true));
-            outer_box.append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
-
             // ── Response section ───────────────────────────────────────────
             var resp_content = new Gtk.Box (Gtk.Orientation.VERTICAL, 10);
             resp_content.margin_start  = 6;
@@ -239,7 +240,47 @@ namespace LLMStudio.UI {
             });
             resp_content.append (max_tokens_row);
 
-            outer_box.append (make_collapsible_section ("Response", resp_content, true));
+            // ── Tools section ──────────────────────────────────────────────────
+            var tools_content = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            tools_content.margin_start  = 6;
+            tools_content.margin_end    = 6;
+            tools_content.margin_bottom = 8;
+
+            var ddg_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            ddg_row.margin_top    = 6;
+            ddg_row.margin_bottom = 2;
+            var ddg_lbl = new Gtk.Label ("DuckDuckGo Search");
+            ddg_lbl.halign  = Gtk.Align.START;
+            ddg_lbl.hexpand = true;
+            ddg_lbl.add_css_class ("body");
+            var ddg_sw = new Gtk.Switch ();
+            ddg_sw.valign = Gtk.Align.CENTER;
+            ddg_row.append (ddg_lbl);
+            ddg_row.append (ddg_sw);
+            tools_content.append (ddg_row);
+
+            var visit_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            visit_row.margin_top    = 4;
+            visit_row.margin_bottom = 2;
+            var visit_lbl = new Gtk.Label ("Visit Website");
+            visit_lbl.halign  = Gtk.Align.START;
+            visit_lbl.hexpand = true;
+            visit_lbl.add_css_class ("body");
+            var visit_sw = new Gtk.Switch ();
+            visit_sw.valign = Gtk.Align.CENTER;
+            visit_row.append (visit_lbl);
+            visit_row.append (visit_sw);
+            tools_content.append (visit_row);
+
+            tool_manager.bind_property ("duckduckgo-enabled",    ddg_sw,   "active",
+                GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
+            tool_manager.bind_property ("visit-website-enabled", visit_sw, "active",
+                GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
+
+            outer_box.append (make_collapsible_section ("Tools", tools_content, true));
+            outer_box.append (make_collapsible_section ("System Prompt", sys_content, false));
+            outer_box.append (make_collapsible_section ("Sampling", samp_content, false));
+            outer_box.append (make_collapsible_section ("Response", resp_content, false));
 
             scroll.set_child (outer_box);
             content_stack.add_named (scroll, "params");

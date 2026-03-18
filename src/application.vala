@@ -247,6 +247,20 @@ namespace LLMStudio {
                     color: @window_fg_color;
                     font-family: monospace;
                 }
+                .tag {
+                    border-radius: 99px;
+                    padding: 2px 10px;
+                    font-size: smaller;
+                    font-weight: 500;
+                }
+                .tag-gpu {
+                    background-color: alpha(@blue_3, 0.15);
+                    color: @blue_3;
+                }
+                .tag-ram {
+                    background-color: alpha(@green_4, 0.15);
+                    color: @green_4;
+                }
                 headerbar.flat {
                     min-height: 47px;
                 }

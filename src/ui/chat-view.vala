@@ -10,12 +10,20 @@ namespace LLMStudio.UI {
     [CCode (cname = "llm_webkit_run_js", cheader_filename = "ui/webkit-glue.h")]
     extern void llm_webkit_run_js (Gtk.Widget wv, string js);
 
+    [CCode (cname = "LlmJsCallback", has_target = false)]
+    private delegate void LlmJsCallback (string json, void* user_data);
+
+    [CCode (cname = "llm_webkit_add_message_handler", cheader_filename = "ui/webkit-glue.h")]
+    extern void llm_webkit_add_message_handler (Gtk.Widget wv, string name,
+                                                LlmJsCallback cb, void* user_data);
+
 
     public class ChatView : Gtk.Box {
 
         private BackendManager    backend_manager;
         private GLib.Settings     settings;
         private ChatHistory       chat_history;
+        private ToolManager       tool_manager;
 
         private Gtk.Widget        web_view;
         private Gtk.TextView      input_view;
@@ -40,12 +48,13 @@ namespace LLMStudio.UI {
         private bool     think_complete  = false;
 
         public ChatView (BackendManager manager, GLib.Settings settings,
-                         ChatHistory history)
+                         ChatHistory history, ToolManager tm)
         {
             Object (orientation: Gtk.Orientation.VERTICAL, spacing: 0);
             this.backend_manager  = manager;
             this.settings         = settings;
             this.chat_history     = history;
+            this.tool_manager     = tm;
             this.pending_attachments = new GLib.List<ChatAttachment> ();
             build_ui ();
             connect_signals ();
@@ -65,6 +74,7 @@ namespace LLMStudio.UI {
             web_view = llm_webkit_new_webview ();
             web_view.vexpand = true;
             web_view.hexpand = true;
+            llm_webkit_add_message_handler (web_view, "llm", on_js_message_cb, this);
             load_blank_page ();
             paned.set_start_child (web_view);
 
@@ -656,12 +666,14 @@ namespace LLMStudio.UI {
             stop_btn.visible       = true;
             current_request        = new GLib.Cancellable ();
 
-            /* Show user bubble with attachments */
+            /* Show user bubble with attachments — render markdown+LaTeX */
+            string user_html_content = text != "" ? HtmlRenderer.render_markdown (text) : "";
             string atts_json = build_atts_display_json_from (atts);
-            run_js (@"llmAddUser(\"$(j(text))\",\"$(j(atts_json))\");");
+            int exchange_idx = msg_id_counter;
+            streaming_id   = next_msg_id ();
+            run_js (@"llmAddUser($(exchange_idx),\"$(j(user_html_content))\",\"$(j(atts_json))\");");
 
             /* Create assistant message slot */
-            streaming_id   = next_msg_id ();
             think_complete = false;
 
             string model_name = humanized_model_name (backend_manager.loaded_model);
@@ -726,31 +738,51 @@ namespace LLMStudio.UI {
                 user_n.set_object (user_o);
                 messages.add_element (user_n);
 
-                yield backend_manager.active_backend.chat_completion_stream (
-                    messages, params,
-                    (chunk, done, reason) => {
-                        if (chunk.length > 0) {
-                            if (first_token_us < 0)
-                                first_token_us = GLib.get_monotonic_time ();
-                            token_count++;
-                            full_content += chunk;
-                            /* Track when response phase begins (after </think>) */
-                            bool in_think = full_content.has_prefix ("<think>") &&
-                                            full_content.index_of ("</think>") < 0;
-                            if (!in_think) {
-                                if (response_start_us < 0)
-                                    response_start_us = GLib.get_monotonic_time ();
-                                response_token_count++;
+                Json.Array? tools = tool_manager.get_tools_array ();
+                int tool_iterations = 0;
+
+                while (true) {
+                    /* Reset per-iteration streaming state */
+                    full_content    = "";
+                    last_reason     = null;
+                    stream_complete = false;
+                    think_complete  = false;
+
+                    yield backend_manager.active_backend.chat_completion_stream (
+                        messages, params,
+                        (chunk, done, reason) => {
+                            if (chunk.length > 0) {
+                                if (first_token_us < 0)
+                                    first_token_us = GLib.get_monotonic_time ();
+                                token_count++;
+                                full_content += chunk;
+                                bool in_think = full_content.has_prefix ("<think>") &&
+                                                full_content.index_of ("</think>") < 0;
+                                if (!in_think) {
+                                    if (response_start_us < 0)
+                                        response_start_us = GLib.get_monotonic_time ();
+                                    response_token_count++;
+                                }
+                                update_streaming (full_content);
                             }
-                            update_streaming (full_content);
+                            if (reason != null && reason.length > 0)
+                                last_reason = reason;
+                            if (done)
+                                stream_complete = true;
+                        },
+                        current_request,
+                        tools
+                    );
+
+                    /* Tool-call agentic loop: execute tools and continue */
+                    if (last_reason == "tool_calls" && tool_iterations < 5) {
+                        if (yield execute_tool_calls (messages)) {
+                            tool_iterations++;
+                            continue;
                         }
-                        if (reason != null && reason.length > 0)
-                            last_reason = reason;
-                        if (done)
-                            stream_complete = true;
-                    },
-                    current_request
-                );
+                    }
+                    break;
+                }
 
             } catch (Error e) {
                 if (!(e is IOError.CANCELLED)) {
@@ -809,6 +841,132 @@ namespace LLMStudio.UI {
 
         private void on_stop_clicked () {
             current_request?.cancel ();
+        }
+
+        /* Execute any pending tool calls from the backend, add messages, update UI.
+           Returns true if at least one tool was executed successfully.              */
+        private async bool execute_tool_calls (Json.Array messages) {
+            string? tc_json = backend_manager.active_backend.pending_tool_call_json;
+            if (tc_json == null) return false;
+            try {
+                var parser = new Json.Parser ();
+                parser.load_from_data (tc_json);
+                var tc_arr = parser.get_root ().get_array ();
+                if (tc_arr.get_length () == 0) return false;
+
+                /* Add assistant message with tool_calls field */
+                var asst_o = new Json.Object ();
+                asst_o.set_string_member ("role",    "assistant");
+                asst_o.set_string_member ("content", "");
+                var tc_msg_arr = new Json.Array ();
+                for (int i = 0; i < (int) tc_arr.get_length (); i++) {
+                    var tc = tc_arr.get_object_element (i);
+                    var tc_msg = new Json.Object ();
+                    tc_msg.set_string_member ("id",   tc.get_string_member ("id"));
+                    tc_msg.set_string_member ("type", "function");
+                    var fn_o = new Json.Object ();
+                    fn_o.set_string_member ("name",      tc.get_string_member ("name"));
+                    fn_o.set_string_member ("arguments", tc.get_string_member ("arguments"));
+                    var fn_n = new Json.Node (Json.NodeType.OBJECT);
+                    fn_n.set_object (fn_o);
+                    tc_msg.set_member ("function", fn_n);
+                    var tc_msg_n = new Json.Node (Json.NodeType.OBJECT);
+                    tc_msg_n.set_object (tc_msg);
+                    tc_msg_arr.add_element (tc_msg_n);
+                }
+                var tc_arr_n = new Json.Node (Json.NodeType.ARRAY);
+                tc_arr_n.set_array (tc_msg_arr);
+                asst_o.set_member ("tool_calls", tc_arr_n);
+                var asst_n = new Json.Node (Json.NodeType.OBJECT);
+                asst_n.set_object (asst_o);
+                messages.add_element (asst_n);
+
+                /* Execute each tool and add result messages */
+                for (int i = 0; i < (int) tc_arr.get_length (); i++) {
+                    var tc = tc_arr.get_object_element (i);
+                    string tc_id   = tc.get_string_member ("id");
+                    string tc_name = tc.get_string_member ("name");
+                    string tc_args = tc.get_string_member ("arguments");
+
+                    /* Show "working" status in the streaming slot */
+                    string display = tool_call_display (tc_name, tc_args);
+                    string disp_html = HtmlRenderer.html_esc (display);
+                    run_js (@"llmSetContent(\"$(streaming_id)\",\"$(j(disp_html))\");");
+
+                    string result = yield tool_manager.execute_async (
+                        tc_name, tc_args, current_request);
+
+                    /* Collapse the tool call into a details element */
+                    run_js (@"llmAddToolCall(\"$(streaming_id)\",\"$(j(display))\",\"$(j(result))\");");
+
+                    /* Reset resp to loading dots for the next model response */
+                    run_js (@"llmSetContent(\"$(streaming_id)\",\"<span class=\\\"dot\\\"></span>\");");
+
+                    /* Add tool result message */
+                    var tool_o = new Json.Object ();
+                    tool_o.set_string_member ("role",         "tool");
+                    tool_o.set_string_member ("tool_call_id", tc_id);
+                    tool_o.set_string_member ("content",      result);
+                    var tool_n = new Json.Node (Json.NodeType.OBJECT);
+                    tool_n.set_object (tool_o);
+                    messages.add_element (tool_n);
+                }
+                return true;
+            } catch (Error e) {
+                warning ("Tool call execution error: %s", e.message);
+                return false;
+            }
+        }
+
+        /* ── JS → Vala message bridge ────────────────────────────────── */
+
+        private static void on_js_message_cb (string json, void* user_data) {
+            unowned ChatView self = (ChatView) user_data;
+            self.handle_js_message (json);
+        }
+
+        private void handle_js_message (string json) {
+            try {
+                var parser = new Json.Parser ();
+                parser.load_from_data (json);
+                var obj = parser.get_root ().get_object ();
+                string action = obj.get_string_member ("action");
+                if (action == "delete") {
+                    int idx = (int) obj.get_int_member ("index");
+                    delete_exchange (idx);
+                }
+            } catch (Error e) {
+                warning ("JS message parse error: %s", e.message);
+            }
+        }
+
+        private void delete_exchange (int idx) {
+            backend_manager.delete_conversation_exchange_at (idx);
+            if (chat_history.current != null) {
+                chat_history.current.delete_exchange_at (idx);
+                chat_history.save ();
+            }
+            update_context_counter ();
+        }
+
+        private string tool_call_display (string name, string args_json) {
+            try {
+                var parser = new Json.Parser ();
+                parser.load_from_data (args_json);
+                var args = parser.get_root ().get_object ();
+                switch (name) {
+                    case "duckduckgo_search":
+                        return "\xf0\x9f\x94\x8d " + (args.has_member ("query")
+                            ? args.get_string_member ("query") : name);
+                    case "visit_website":
+                        return "\xf0\x9f\x8c\x90 " + (args.has_member ("url")
+                            ? args.get_string_member ("url") : name);
+                    default:
+                        return name;
+                }
+            } catch (Error e) {
+                return name;
+            }
         }
     }
 }

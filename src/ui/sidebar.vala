@@ -73,7 +73,7 @@ namespace LLMStudio.UI {
 
         private void build_ui () {
             // ── Icon rail (left, narrow) ──────────────────────────────────
-            var icon_rail = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
+            var icon_rail = new Gtk.Box (Gtk.Orientation.VERTICAL, 5);
             icon_rail.width_request = 48;
 
             chat_btn   = make_nav_btn ("chat-symbolic",                      "Chat");

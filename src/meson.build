@@ -20,6 +20,9 @@ sources = files(
   'huggingface/hf-model.vala',
   'huggingface/hf-client.vala',
 
+  # Tools
+  'tools/tool-manager.vala',
+
   # Inference backends
   'backend/backend.vala',
   'backend/backend-manager.vala',

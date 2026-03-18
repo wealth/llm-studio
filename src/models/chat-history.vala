@@ -23,6 +23,15 @@ namespace LLMStudio {
             _messages = new GLib.List<ChatMessage> ();
         }
 
+        /* Remove the user+assistant pair at exchange index @idx (0-based).
+           Messages are stored as alternating user/assistant pairs.        */
+        public void delete_exchange_at (int idx) {
+            var asst = _messages.nth_data ((uint)(idx * 2 + 1));
+            if (asst != null) _messages.remove (asst);
+            var user = _messages.nth_data ((uint)(idx * 2));
+            if (user != null) _messages.remove (user);
+        }
+
         public uint message_count () {
             return _messages.length ();
         }

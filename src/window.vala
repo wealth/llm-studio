@@ -7,6 +7,7 @@ namespace LLMStudio {
         private HuggingFace.HFClient hf_client;
         private OpenAIServer   api_server;
         private ChatHistory    chat_history;
+        private ToolManager    tool_manager;
 
         // UI components
         private Adw.OverlaySplitView split_view;
@@ -44,6 +45,7 @@ namespace LLMStudio {
             this.hf_client       = hf_client;
             this.api_server      = api_server;
             this.chat_history    = chat_history;
+            this.tool_manager    = new ToolManager (settings);
 
             build_ui ();
             restore_state ();
@@ -56,66 +58,17 @@ namespace LLMStudio {
             // in the header popover below.
             hub_view = new UI.HubSearchView (hf_client, model_manager, settings);
 
-            // Root: toast overlay → split view directly (no spanning top header)
+            // Root: toast overlay → single top-level ToolbarView so the header
+            // spans the full window width (no separate sidebar header).
             toast_overlay = new Adw.ToastOverlay ();
             set_content (toast_overlay);
 
-            // Split view fills the entire window, including the title-bar row
-            split_view = new Adw.OverlaySplitView ();
-            split_view.sidebar_position       = Gtk.PackType.START;
-            split_view.min_sidebar_width      = 240;
-            split_view.max_sidebar_width      = 340;
-            split_view.sidebar_width_fraction = 0.24;
-            toast_overlay.set_child (split_view);
+            var root_toolbar = new Adw.ToolbarView ();
+            toast_overlay.set_child (root_toolbar);
 
-            // ── Sidebar panel ────────────────────────────────────────────────
-            // Give the sidebar its own ToolbarView + HeaderBar so it occupies
-            // the full window height (Builder-style layout).
-            var sidebar_toolbar = new Adw.ToolbarView ();
-
-            var sidebar_header = new Adw.HeaderBar ();
-            sidebar_header.add_css_class ("flat");
-            // No window-decoration buttons here — they live in the content header
-            sidebar_header.decoration_layout = "";
-
-            var app_name_lbl = new Gtk.Label ("LLM Studio");
-            app_name_lbl.add_css_class ("heading");
-            sidebar_header.set_title_widget (app_name_lbl);
-
-            sidebar_toolbar.add_top_bar (sidebar_header);
-            sidebar_toolbar.add_top_bar (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
-
-            sidebar = new UI.Sidebar (backend_manager, chat_history);
-            sidebar.page_changed.connect (on_page_changed);
-            sidebar.new_chat_requested.connect (() => {
-                chat_view.new_chat ();
-                navigate_to (UI.SidebarPage.CHAT);
-            });
-            sidebar.session_selected.connect (s => {
-                chat_view.load_session (s);
-                navigate_to (UI.SidebarPage.CHAT);
-            });
-            sidebar.session_delete_requested.connect (s => {
-                chat_history.delete_session (s);
-                if (chat_history.current != null)
-                    chat_view.load_session (chat_history.current);
-                else {
-                    var new_s = chat_history.new_session ();
-                    chat_view.load_session (new_s);
-                }
-                navigate_to (UI.SidebarPage.CHAT);
-            });
-            sidebar_toolbar.set_content (sidebar);
-
-            split_view.set_sidebar (sidebar_toolbar);
-
-            // ── Content panel ────────────────────────────────────────────────
-            var content_toolbar = new Adw.ToolbarView ();
-
+            // ── Single full-width header ─────────────────────────────────────
             var content_header = new Adw.HeaderBar ();
             content_header.add_css_class ("flat");
-            // Window decoration buttons only in the content header
-            content_header.show_start_title_buttons = false;
 
             // Sidebar toggle
             var sidebar_btn = new Gtk.ToggleButton ();
@@ -133,6 +86,7 @@ namespace LLMStudio {
             arrow_icon.pixel_size = 12;
 
             var btn_inner = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
+            btn_inner.halign = Gtk.Align.CENTER;
             btn_inner.valign = Gtk.Align.CENTER;
             btn_inner.append (model_btn_lbl);
             btn_inner.append (arrow_icon);
@@ -193,8 +147,38 @@ namespace LLMStudio {
             });
             content_header.pack_end (params_toggle_btn);
 
-            content_toolbar.add_top_bar (content_header);
-            content_toolbar.add_top_bar (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
+            root_toolbar.add_top_bar (content_header);
+            root_toolbar.add_top_bar (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
+
+            // ── Split view (below the single header) ────────────────────────
+            split_view = new Adw.OverlaySplitView ();
+            split_view.sidebar_position       = Gtk.PackType.START;
+            split_view.min_sidebar_width      = 240;
+            split_view.max_sidebar_width      = 340;
+            split_view.sidebar_width_fraction = 0.24;
+
+            // Sidebar goes directly — no own header bar
+            sidebar = new UI.Sidebar (backend_manager, chat_history);
+            sidebar.page_changed.connect (on_page_changed);
+            sidebar.new_chat_requested.connect (() => {
+                chat_view.new_chat ();
+                navigate_to (UI.SidebarPage.CHAT);
+            });
+            sidebar.session_selected.connect (s => {
+                chat_view.load_session (s);
+                navigate_to (UI.SidebarPage.CHAT);
+            });
+            sidebar.session_delete_requested.connect (s => {
+                chat_history.delete_session (s);
+                if (chat_history.current != null)
+                    chat_view.load_session (chat_history.current);
+                else {
+                    var new_s = chat_history.new_session ();
+                    chat_view.load_session (new_s);
+                }
+                navigate_to (UI.SidebarPage.CHAT);
+            });
+            split_view.set_sidebar (sidebar);
 
             // Content stack (the main pages)
             content_stack = new Gtk.Stack ();
@@ -204,7 +188,7 @@ namespace LLMStudio {
             content_stack.vexpand = true;
 
             // Main body: resizable paned split — content stack | params panel
-            params_panel = new UI.ChatParamsPanel (backend_manager);
+            params_panel = new UI.ChatParamsPanel (backend_manager, tool_manager);
 
             main_paned = new Gtk.Paned (Gtk.Orientation.HORIZONTAL);
             main_paned.start_child        = content_stack;
@@ -213,12 +197,12 @@ namespace LLMStudio {
             main_paned.resize_end_child   = false;
             main_paned.shrink_start_child = false;
             main_paned.shrink_end_child   = false;
-            content_toolbar.set_content (main_paned);
+            split_view.set_content (main_paned);
 
-            split_view.set_content (content_toolbar);
+            root_toolbar.set_content (split_view);
 
             // ── Pages ────────────────────────────────────────────────────────
-            chat_view = new UI.ChatView (backend_manager, settings, chat_history);
+            chat_view = new UI.ChatView (backend_manager, settings, chat_history, tool_manager);
             chat_view.show_toast.connect (show_toast);
             content_stack.add_named (chat_view, "chat");
 

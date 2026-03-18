@@ -12,6 +12,8 @@ namespace LLMStudio.UI {
         // Hardware group
         private Gtk.Scale   gpu_layers_scale;
         private Gtk.Label   gpu_layers_val_lbl;
+        private Gtk.Label   gpu_est_lbl;
+        private Gtk.Label   ram_est_lbl;
         private int         gpu_layers_max;
         private Adw.SpinRow threads_row;
         private Adw.SwitchRow flash_attn_row;
@@ -101,8 +103,22 @@ namespace LLMStudio.UI {
             var meta_lbl = new Gtk.Label (string.joinv ("  ·  ", parts_arr));
             meta_lbl.add_css_class ("dim-label");
             meta_lbl.halign = Gtk.Align.START;
+            var est_tags_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
+            est_tags_box.margin_top = 4;
+            gpu_est_lbl = new Gtk.Label ("");
+            gpu_est_lbl.add_css_class ("tag");
+            gpu_est_lbl.add_css_class ("tag-gpu");
+            gpu_est_lbl.visible = false;
+            ram_est_lbl = new Gtk.Label ("");
+            ram_est_lbl.add_css_class ("tag");
+            ram_est_lbl.add_css_class ("tag-ram");
+            ram_est_lbl.visible = false;
+            est_tags_box.append (gpu_est_lbl);
+            est_tags_box.append (ram_est_lbl);
+
             model_info_box.append (name_lbl);
             model_info_box.append (meta_lbl);
+            model_info_box.append (est_tags_box);
             model_box.append (model_info_box);
 
             // Scrolled content
@@ -204,8 +220,10 @@ namespace LLMStudio.UI {
                 : params.gpu_layers.clamp (0, gpu_layers_max);
             gpu_layers_scale.set_value (init_gpu);
             update_gpu_layers_label (init_gpu);
-            gpu_layers_scale.value_changed.connect (() =>
-                update_gpu_layers_label ((int) gpu_layers_scale.get_value ()));
+            gpu_layers_scale.value_changed.connect (() => {
+                update_gpu_layers_label ((int) gpu_layers_scale.get_value ());
+                update_estimates ();
+            });
 
             gpu_box.append (gpu_header);
             gpu_box.append (gpu_sub_lbl);
@@ -248,6 +266,7 @@ namespace LLMStudio.UI {
                 default:     kv_type_row.selected = 0; break;
             }
             kv_group.add (kv_type_row);
+            kv_type_row.notify["selected"].connect (() => update_estimates ());
 
             rope_scale_row = make_double_spin_row ("RoPE Frequency Scale",
                 "Scale factor for RoPE frequencies (for context extension)", 0.01, 8.0, params.rope_freq_scale, 0.01);
@@ -330,6 +349,10 @@ namespace LLMStudio.UI {
             sys_expander.subtitle = params.system_prompt == "" ? "None" : params.system_prompt[0:int.min (50, params.system_prompt.length)] + "…";
             sys_expander.add_row (new Gtk.ListBoxRow () { child = sys_frame, activatable = false });
             sys_group.add (sys_expander);
+
+            // Wire context length changes to re-estimate and run initial estimate
+            ctx_row.notify["value"].connect (() => update_estimates ());
+            update_estimates ();
         }
 
         private Adw.SpinRow make_spin_row (string title, string subtitle, int min, int max, int val, int step) {
@@ -364,6 +387,35 @@ namespace LLMStudio.UI {
                 gpu_layers_val_lbl.label = "All %d layers".printf (gpu_layers_max);
             else
                 gpu_layers_val_lbl.label = "%d / %d layers".printf (v, gpu_layers_max);
+        }
+
+        private void update_estimates () {
+            if (model.size <= 0 || gpu_layers_max <= 0) {
+                gpu_est_lbl.visible = false;
+                ram_est_lbl.visible = false;
+                return;
+            }
+            int gpu_layers = (int) gpu_layers_scale.get_value ();
+            int ctx        = (int) ctx_row.get_value ();
+
+            // Weight bytes per layer
+            double bpl = (double) model.size / gpu_layers_max;
+
+            // KV cache bytes per token per layer (fp16 baseline = 4096 B, halved/quartered for q8/q4)
+            double kv_bptl = 4096.0;
+            switch (kv_type_row.selected) {
+                case 1: kv_bptl = 2048.0; break;  // q8_0
+                case 2: kv_bptl = 1024.0; break;  // q4_0
+            }
+
+            double gpu_bytes = gpu_layers * (bpl + ctx * kv_bptl);
+            double ram_bytes = (gpu_layers_max - gpu_layers) * (bpl + ctx * kv_bptl);
+
+            double gb = 1024.0 * 1024.0 * 1024.0;
+            gpu_est_lbl.label = "GPU: ~%.1f GB".printf (gpu_bytes / gb);
+            ram_est_lbl.label = "RAM: ~%.1f GB".printf (ram_bytes / gb);
+            gpu_est_lbl.visible = true;
+            ram_est_lbl.visible = true;
         }
 
         // Returns total VRAM in bytes from the first detected GPU, or 0 if not detected.

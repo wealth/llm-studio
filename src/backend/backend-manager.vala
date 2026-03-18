@@ -76,6 +76,13 @@ namespace LLMStudio {
             _conversation.append (msg);
         }
 
+        public void delete_conversation_exchange_at (int idx) {
+            var asst = _conversation.nth_data ((uint)(idx * 2 + 1));
+            if (asst != null) _conversation.remove (asst);
+            var user = _conversation.nth_data ((uint)(idx * 2));
+            if (user != null) _conversation.remove (user);
+        }
+
         public int get_server_port () {
             return _active?.get_server_port () ?? 0;
         }
