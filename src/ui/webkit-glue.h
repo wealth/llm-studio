@@ -23,3 +23,8 @@ void llm_webkit_add_message_handler (GtkWidget     *wv,
                                      const char    *name,
                                      LlmJsCallback  cb,
                                      gpointer       user_data);
+
+/* Inject @source as a UserScript that runs at document-start in all
+   frames.  Call this once after llm_webkit_new_webview() to install
+   persistent scripts (e.g. chat.js) that survive page reloads.       */
+void llm_webkit_add_user_script (GtkWidget *wv, const char *source);

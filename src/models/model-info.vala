@@ -521,6 +521,21 @@ namespace LLMStudio {
         }
     }
 
+    /* A single tool call executed during an agentic round. */
+    public class ChatToolCall : Object {
+        public string display { get; set; default = ""; }
+        public string result  { get; set; default = ""; }
+    }
+
+    /* One agentic round: optional think block, zero or more tool calls, optional response. */
+    public class ChatRound : Object {
+        public string think    { get; set; default = ""; }
+        public string response { get; set; default = ""; }
+        /* Field (not property) to avoid GLib.List "duplicating list" Vala bug. */
+        public GLib.List<ChatToolCall> tool_calls;
+        construct { tool_calls = new GLib.List<ChatToolCall> (); }
+    }
+
     public class ChatMessage : Object {
         public string   role       { get; set; default = "user"; }
         public string   content    { get; set; default = "";     }
@@ -530,13 +545,15 @@ namespace LLMStudio {
         public string   model_name { get; set; default = "";     }
         public string   stats_text { get; set; default = "";     }
 
-        /* Multimodal attachments (images, text files). Field (not property)
-           to avoid GLib.List "duplicating list" Vala bug.              */
+        /* Multimodal attachments and agentic rounds. Fields (not properties)
+           to avoid GLib.List "duplicating list" Vala bug.                  */
         public GLib.List<ChatAttachment> attachments;
+        public GLib.List<ChatRound>      rounds;
 
         construct {
             timestamp   = new DateTime.now_local ();
             attachments = new GLib.List<ChatAttachment> ();
+            rounds      = new GLib.List<ChatRound> ();
         }
 
         public bool has_attachments () {

@@ -20,7 +20,10 @@
       "Read(//home/dima/dev/llm-studio2/**)",
       "Bash(curl -s -L \"https://lite.duckduckgo.com/lite/?q=python+language\" -H \"User-Agent: Mozilla/5.0 \\(X11; Linux x86_64; rv:120.0\\) Gecko/20100101 Firefox/120.0\" 2>&1 | head -100)",
       "Bash(cp data/dev.llmstudio.LLMStudio.gschema.xml ~/.local/share/glib-2.0/schemas/)",
-      "Bash(glib-compile-schemas ~/.local/share/glib-2.0/schemas/)"
+      "Bash(glib-compile-schemas ~/.local/share/glib-2.0/schemas/)",
+      "Bash(chmod 755 /tmp/llm-studio-pkg/DEBIAN/postinst /tmp/llm-studio-pkg/DEBIAN/postrm)",
+      "Bash(chmod 755 /tmp/llm-studio-pkg/usr/bin/llm-studio)",
+      "Bash(dpkg-deb:*)"
     ]
   }
 }

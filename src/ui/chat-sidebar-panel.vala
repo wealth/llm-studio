@@ -4,6 +4,7 @@ namespace LLMStudio.UI {
         private ChatHistory   history;
         private Gtk.ListBox   session_list;
         private string        filter_text = "";
+        private bool          selection_guard = false;
 
         public signal void new_chat_requested ();
         public signal void session_selected   (ChatSession session);
@@ -120,6 +121,7 @@ namespace LLMStudio.UI {
         }
 
         private void on_row_selected (Gtk.ListBoxRow? row) {
+            if (selection_guard) return;
             if (row == null) return;
             var id = row.get_data<string> ("session-id");
             for (uint i = 0; i < history.sessions.get_n_items (); i++) {
@@ -132,8 +134,10 @@ namespace LLMStudio.UI {
         }
 
         private void on_current_changed (ChatSession? session) {
+            selection_guard = true;
             if (session == null) {
                 session_list.select_row (null);
+                selection_guard = false;
                 return;
             }
             var row = session_list.get_first_child ();
@@ -142,11 +146,13 @@ namespace LLMStudio.UI {
                     var r = (Gtk.ListBoxRow) row;
                     if (r.get_data<string> ("session-id") == session.id) {
                         session_list.select_row (r);
+                        selection_guard = false;
                         return;
                     }
                 }
                 row = row.get_next_sibling ();
             }
+            selection_guard = false;
         }
     }
 }

@@ -17,25 +17,43 @@ namespace LLMStudio {
         }
 
         /* Escape a string for safe embedding as a JavaScript double-quoted
-           string literal.  Also escapes < > to avoid XSS via innerHTML.  */
+           string literal.  Also escapes < > to avoid XSS via innerHTML.
+           Uses a StringBuilder loop to avoid GLib.Regex (which throws on
+           invalid UTF-8, possible during incremental streaming).          */
         public static string js_str (string s) {
-            return s
-                .replace ("\\",  "\\\\")
-                .replace ("\"",  "\\\"")
-                .replace ("\n",  "\\n")
-                .replace ("\r",  "\\r")
-                .replace ("\t",  "\\t")
-                .replace ("<",   "\\x3c")
-                .replace (">",   "\\x3e");
+            var sb = new StringBuilder.sized (s.length + 16);
+            unowned uint8[] bytes = s.data;
+            for (int i = 0; i < bytes.length; i++) {
+                uint8 c = bytes[i];
+                switch (c) {
+                    case '\\': sb.append ("\\\\"); break;
+                    case '"':  sb.append ("\\\""); break;
+                    case '\n': sb.append ("\\n");  break;
+                    case '\r': sb.append ("\\r");  break;
+                    case '\t': sb.append ("\\t");  break;
+                    case '<':  sb.append ("\\x3c"); break;
+                    case '>':  sb.append ("\\x3e"); break;
+                    default:   sb.append_c ((char) c); break;
+                }
+            }
+            return sb.str;
         }
 
         /* Escape plain text for safe embedding in HTML markup.  */
         public static string html_esc (string s) {
-            return s
-                .replace ("&", "&amp;")
-                .replace ("<", "&lt;")
-                .replace (">", "&gt;")
-                .replace ("\"", "&quot;");
+            var sb = new StringBuilder.sized (s.length + 16);
+            unowned uint8[] bytes = s.data;
+            for (int i = 0; i < bytes.length; i++) {
+                uint8 c = bytes[i];
+                switch (c) {
+                    case '&': sb.append ("&amp;");  break;
+                    case '<': sb.append ("&lt;");   break;
+                    case '>': sb.append ("&gt;");   break;
+                    case '"': sb.append ("&quot;"); break;
+                    default:  sb.append_c ((char) c); break;
+                }
+            }
+            return sb.str;
         }
 
         /* Return the complete initial HTML page (empty conversation).  */
@@ -48,7 +66,6 @@ namespace LLMStudio {
                 "<script src=\"katex.min.js\"></script>\n" +
                 "<script src=\"contrib/auto-render.js\"></script>\n" +
                 "<style>" + CSS + "</style>\n" +
-                "<script>" + JS  + "</script>\n" +
                 "</head><body><div id=\"chat\"></div></body></html>";
         }
 
@@ -66,7 +83,6 @@ namespace LLMStudio {
                 "<script src=\"katex.min.js\"></script>\n" +
                 "<script src=\"contrib/auto-render.js\"></script>\n" +
                 "<style>" + CSS + "</style>\n" +
-                "<script>" + JS  + "</script>\n" +
                 "</head><body><div id=\"chat\">\n");
 
             int id = 0;
@@ -75,7 +91,7 @@ namespace LLMStudio {
                     sb.append (user_html (id, msg.content, msg.attachments));
                 } else if (msg.role == "assistant") {
                     string name = msg.model_name != "" ? msg.model_name : model_name;
-                    sb.append (assistant_html (id, msg.content, name, msg.stats_text));
+                    sb.append (assistant_html (id, msg, name));
                     id++;
                 }
             }
@@ -128,10 +144,94 @@ namespace LLMStudio {
         }
 
         private static string assistant_html (int id,
-                                              string content,
-                                              string model_name,
-                                              string stats_text = "")
+                                              unowned ChatMessage msg,
+                                              string model_name)
         {
+            string sid = "m%d".printf (id);
+            var sb = new StringBuilder ();
+            sb.append ("<div class=\"asst-row\" id=\"asst-" + sid + "\"");
+
+            /* data-raw on the outer row for llmCopyRow() */
+            string raw_resp = msg.content;
+            if (msg.rounds.length () > 0) {
+                unowned ChatRound last = msg.rounds.last ().data;
+                raw_resp = last.response;
+            } else if (msg.content.has_prefix ("<think>")) {
+                /* extract response portion for copy */
+                int end = msg.content.index_of ("</think>");
+                if (end >= 0)
+                    raw_resp = msg.content.substring (end + 8).strip ();
+            }
+            sb.append (" data-raw=\"");
+            sb.append (html_esc (raw_resp));
+            sb.append ("\">");
+
+            sb.append ("<div class=\"asst-name\">" + html_esc (model_name) + "</div>");
+            sb.append ("<div class=\"rounds\" id=\"asst-" + sid + "-rounds\">");
+
+            if (msg.rounds.length () > 0) {
+                int r = 1;
+                foreach (unowned var round in msg.rounds) {
+                    sb.append (round_html (sid, r, round));
+                    r++;
+                }
+            } else {
+                /* Legacy / simple message — parse think from content */
+                sb.append (round_html_from_content (sid, 1, msg.content));
+            }
+
+            sb.append ("</div>");
+
+            sb.append ("<div class=\"asst-stats\" id=\"asst-" + sid + "-stats\">");
+            sb.append (html_esc (msg.stats_text));
+            sb.append ("</div>");
+
+            sb.append ("<div class=\"asst-actions\" id=\"asst-" + sid + "-acts\">");
+            sb.append ("<button onclick=\"llmCopyRow('" + sid + "')\">Copy</button>");
+            sb.append ("<button onclick=\"llmDeleteExchange(%d)\">Delete</button>".printf (id));
+            sb.append ("</div>");
+
+            sb.append ("</div>\n");
+            return sb.str;
+        }
+
+        /* Render one round from a ChatRound (used for persisted multi-round messages). */
+        private static string round_html (string sid, int r, unowned ChatRound round) {
+            string rid        = sid + "-r%d".printf (r);
+            string think_html = round.think    != "" ? render_markdown (round.think)    : "";
+            string resp_html  = round.response != "" ? render_markdown (round.response) : "";
+            var sb = new StringBuilder ();
+
+            if (think_html != "") {
+                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" open>");
+            } else {
+                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" hidden>");
+            }
+            sb.append ("<summary>Thinking\u2026</summary>");
+            sb.append ("<div class=\"tk\" id=\"asst-" + rid + "-think-body\">");
+            sb.append (think_html);
+            sb.append ("</div></details>");
+
+            sb.append ("<div class=\"tool-calls\" id=\"asst-" + rid + "-tools\">");
+            foreach (unowned var tc in round.tool_calls) {
+                sb.append ("<details class=\"tool-call\" open><summary>");
+                sb.append (html_esc (tc.display));
+                sb.append ("</summary><div class=\"tool-result\">");
+                sb.append (html_esc (tc.result));
+                sb.append ("</div></details>");
+            }
+            sb.append ("</div>");
+
+            sb.append ("<div class=\"asst-content\" id=\"asst-" + rid + "-resp\">");
+            sb.append (resp_html);
+            sb.append ("</div>");
+
+            return sb.str;
+        }
+
+        /* Render one round from a plain content string (legacy / simple messages). */
+        private static string round_html_from_content (string sid, int r, string content) {
+            string rid   = sid + "-r%d".printf (r);
             string think = "";
             string resp  = content;
 
@@ -150,33 +250,26 @@ namespace LLMStudio {
                 resp  = resp.strip ();
             }
 
-            string resp_html = resp  != "" ? render_markdown (resp) : "";
-            string raw_resp  = resp;
-            string sid       = "m%d".printf (id);
-
+            string think_html = think != "" ? render_markdown (think) : "";
+            string resp_html  = resp  != "" ? render_markdown (resp)  : "";
             var sb = new StringBuilder ();
-            sb.append ("<div class=\"asst-row\" id=\"row-" + sid + "\">");
-            sb.append ("<div class=\"asst-name\">" + html_esc (model_name) + "</div>");
 
-            if (think != "") {
-                /* Store raw think text; llmRenderAll() will call renderThinkText() on it. */
-                sb.append ("<details class=\"think\"><summary>Thinking\u2026</summary>");
-                sb.append ("<div data-think-raw=\"");
-                sb.append (html_esc (think));
-                sb.append ("\"></div></details>");
+            if (think_html != "") {
+                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" open>");
+            } else {
+                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" hidden>");
             }
+            sb.append ("<summary>Thinking\u2026</summary>");
+            sb.append ("<div class=\"tk\" id=\"asst-" + rid + "-think-body\">");
+            sb.append (think_html);
+            sb.append ("</div></details>");
 
-            sb.append ("<div class=\"asst-content\" id=\"" + sid + "\" data-raw=\"");
-            sb.append (html_esc (raw_resp));
-            sb.append ("\">");
+            sb.append ("<div class=\"tool-calls\" id=\"asst-" + rid + "-tools\"></div>");
+
+            sb.append ("<div class=\"asst-content\" id=\"asst-" + rid + "-resp\">");
             sb.append (resp_html);
             sb.append ("</div>");
-            sb.append ("<div class=\"asst-stats\">" + html_esc (stats_text) + "</div>");
-            sb.append ("<div class=\"asst-actions\">" +
-                       "<button onclick=\"llmCopy('" + sid + "')\">Copy</button>" +
-                       "<button onclick=\"llmDeleteExchange(%d)\">Delete</button>".printf (id) +
-                       "</div>");
-            sb.append ("</div>\n");
+
             return sb.str;
         }
 
@@ -231,7 +324,7 @@ details.tool-call pre{font-size:11px;max-height:160px;overflow-y:auto;
 details.think{background:var(--think-bg);border:1px solid var(--border);
   border-radius:8px;padding:2px 10px;margin-bottom:10px;
   font-size:13px;color:var(--dim)}
-details.think .katex,.details.think .katex-display{color:var(--fg)}
+details.think .katex,details.think .katex-display{color:var(--fg)}
 details.think summary{cursor:pointer;padding:4px 0;font-style:italic}
 details.think[open] summary{margin-bottom:4px}
 .asst-content h1,.asst-content h2,.asst-content h3,
@@ -268,237 +361,6 @@ details.think[open] summary{margin-bottom:4px}
 @keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
   background:var(--dim);animation:pulse 1.2s ease-in-out infinite;margin:2px}
-""";
-
-        /* ── JavaScript ──────────────────────────────────────────────── */
-
-        private const string JS = """
-var KATEX_OPTS={
-  delimiters:[
-    {left:"$$",right:"$$",display:true},
-    {left:"\\[",right:"\\]",display:true},
-    {left:"$",right:"$",display:false},
-    {left:"\\(",right:"\\)",display:false}
-  ],
-  throwOnError:false,output:"html"
-};
-function katexEl(el){
-  if(typeof renderMathInElement!=='undefined'){
-    try{renderMathInElement(el,KATEX_OPTS);}catch(e){console.error(e);}
-  }
-}
-/* Normalise non-standard math delimiters to ones KaTeX understands.
-   Protects code blocks and already-valid math delimiters first, then:
-     ( \...  )  →  \( \... \)   inline
-     [ \...  ]  →  \[ \... \]   display                              */
-function normalizeMathDelimiters(html){
-  var saved=[];
-  function save(m){saved.push(m);return'\x01'+(saved.length-1)+'\x01';}
-  // Protect code blocks
-  html=html.replace(/<(pre|code)[\s\S]*?<\/\1>/gi,save);
-  // Protect existing valid math delimiters ($...$, $$...$$, \(...\), \[...\])
-  html=html.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+?\$/g,save);
-  html=html.replace(/\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g,save);
-  // Convert ( ... ) → \( ... \) and [ ... ] → \[ ... \] when content contains a backslash
-  html=html.replace(/\(\s*([^()]*\\[^()]*)\s*\)/g,'\\($1\\)');
-  html=html.replace(/\[\s*([^\[\]]*\\[^\[\]]*)\s*\]/g,'\\[$1\\]');
-  return html.replace(/\x01(\d+)\x01/g,function(_,i){return saved[+i];});
-}
-function llmRenderAll(){
-  /* Render think-block placeholders from session-loaded messages. */
-  document.querySelectorAll('[data-think-raw]').forEach(function(el){
-    el.innerHTML=renderThinkText(el.dataset.thinkRaw);
-    el.removeAttribute('data-think-raw');
-  });
-  /* Normalise non-standard delimiters before KaTeX pass. */
-  document.querySelectorAll('.asst-content,.user-bubble').forEach(function(el){
-    el.innerHTML=normalizeMathDelimiters(el.innerHTML);
-  });
-  katexEl(document.body);
-}
-function scrollBottom(){window.scrollTo(0,document.body.scrollHeight);}
-function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function llmClear(){document.getElementById('chat').innerHTML='';}
-function llmAddToolCall(id,display,result){
-  var row=document.getElementById('row-'+id);
-  if(!row)return;
-  var tc=document.createElement('details');
-  tc.className='tool-call';
-  tc.innerHTML='<summary>'+escHtml(display)+'</summary><pre>'+escHtml(result)+'</pre>';
-  var container=row.querySelector('.tool-calls');
-  if(container)container.appendChild(tc);
-  scrollBottom();
-}
-function llmCopy(id){
-  var el=document.getElementById(id);
-  if(el){navigator.clipboard.writeText(el.dataset.raw||el.textContent).catch(function(){});}
-}
-function llmCopyUser(idx){
-  var row=document.getElementById('u-'+idx);
-  if(!row)return;
-  var bubble=row.querySelector('.user-bubble');
-  navigator.clipboard.writeText(bubble?bubble.dataset.raw||bubble.textContent:row.textContent).catch(function(){});
-}
-function llmDeleteExchange(idx){
-  var ur=document.getElementById('u-'+idx);
-  var ar=document.getElementById('row-m'+idx);
-  if(ur)ur.remove();
-  if(ar)ar.remove();
-  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.llm)
-    window.webkit.messageHandlers.llm.postMessage(JSON.stringify({action:'delete',index:idx}));
-}
-function llmAddUser(idx,text,attsJson){
-  var d=document.createElement('div');
-  d.className='user-row';
-  d.id='u-'+idx;
-  var col=document.createElement('div');
-  col.className='user-col';
-  if(attsJson){try{
-    var atts=JSON.parse(attsJson);
-    for(var i=0;i<atts.length;i++){
-      var a=atts[i];
-      if(a.type==='image'){
-        var img=document.createElement('img');
-        img.className='att-img';img.src=a.src;img.alt=escHtml(a.filename);
-        col.appendChild(img);
-      }else{
-        var chip=document.createElement('div');
-        chip.className='att-chip';
-        chip.textContent='\uD83D\uDCC4 '+a.filename;
-        col.appendChild(chip);
-      }
-    }
-  }catch(e){}}
-  if(text){
-    var b=document.createElement('div');
-    b.className='user-bubble';b.dataset.raw=b.dataset.raw||'';
-    b.innerHTML=normalizeMathDelimiters(text);
-    katexEl(b);
-    col.appendChild(b);
-  }
-  var acts=document.createElement('div');
-  acts.className='user-actions';
-  acts.innerHTML='<button onclick="llmCopyUser('+idx+')">Copy</button>'+
-                 '<button onclick="llmDeleteExchange('+idx+')">Delete</button>';
-  col.appendChild(acts);
-  d.appendChild(col);
-  document.getElementById('chat').appendChild(d);
-  scrollBottom();
-}
-function llmStartAssistant(id,model){
-  var d=document.createElement('div');
-  d.className='asst-row';
-  d.id='row-'+id;
-  d.innerHTML=
-    '<div class="asst-name">'+escHtml(model)+'</div>'+
-    '<div class="tool-calls"></div>'+
-    '<div class="asst-content">'+
-      '<div class="resp"><span class="dot"></span></div>'+
-    '</div>'+
-    '<div class="asst-stats"></div>'+
-    '<div class="asst-actions" style="display:none"></div>';
-  document.getElementById('chat').appendChild(d);
-  scrollBottom();
-}
-function wrapInlineMath(s){
-  /* Detect common LaTeX/math patterns that lack $...$ delimiters and wrap them.
-     Works in two protected passes so inner \commands aren't double-wrapped. */
-  var sv=[];
-  function save(m){sv.push(m);return'\x01'+(sv.length-1)+'\x01';}
-  // Pass 0: protect already-delimited math
-  s=s.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|\\\[[\s\S]*?\\\]|\\\([^)]*?\\\)/g,save);
-  // Pass 1: subscript/superscript expressions — G_{\mu\nu}, x^2, T_μν, e^{i\pi}
-  s=s.replace(/([A-Za-z\u0370-\u03FF\d]+)([_^])(\{[^{}]+\}|[A-Za-z\u0370-\u03FF\d\\]+)/g,
-    function(m){return save('$'+m+'$');});
-  // Pass 2: standalone backslash commands — \alpha, \frac{a}{b}, \mu
-  s=s.replace(/(\\[A-Za-z]+(?:\{[^{}]*\})*)/g,
-    function(m){return save('$'+m+'$');});
-  return s.replace(/\x01(\d+)\x01/g,function(_,i){return sv[+i];});
-}
-function renderThinkText(raw){
-  /* Render think content as markdown-like HTML (with KaTeX support) */
-  if(!raw)return'';
-  var s=wrapInlineMath(raw);
-  s=s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  return s.split(/\n{2,}/).map(function(p){
-    var t=p.trim();return t?'<p>'+t.replace(/\n/g,'<br>')+'</p>':'';
-  }).join('');
-}
-function llmSetThink(id,raw){
-  var row=document.getElementById('row-'+id);
-  if(!row)return;
-  var el=row.querySelector('.asst-content');
-  if(!el)return;
-  var det=el.querySelector('details.think');
-  if(!det){
-    det=document.createElement('details');
-    det.className='think';
-    det.open=true;
-    det.innerHTML='<summary>Thinking\u2026</summary><div class="tk"></div>';
-    el.insertBefore(det,el.firstChild);
-  }
-  var tk=det.querySelector('.tk');
-  if(tk){tk.innerHTML=renderThinkText(raw);katexEl(tk);}
-  scrollBottom();
-}
-function llmSetContent(id,html){
-  var row=document.getElementById('row-'+id);
-  if(!row)return;
-  var resp=row.querySelector('.resp');
-  if(!resp)return;
-  resp.innerHTML=html;
-  scrollBottom();
-}
-function llmFinalize(id,thinkRaw,contentHtml,rawContent){
-  var row=document.getElementById('row-'+id);
-  if(!row)return;
-  var el=row.querySelector('.asst-content');
-  if(!el)return;
-  /* Update think block in-place (reuse streaming element, don't rebuild). */
-  var det=el.querySelector('details.think');
-  if(thinkRaw){
-    if(!det){
-      det=document.createElement('details');
-      det.className='think';
-      det.innerHTML='<summary>Thinking\u2026</summary><div class="tk"></div>';
-      el.insertBefore(det,el.firstChild);
-    }
-    det.open=false;
-    var tk=det.querySelector('.tk');
-    if(!tk){tk=document.createElement('div');tk.className='tk';det.appendChild(tk);}
-    tk.innerHTML=renderThinkText(thinkRaw);
-  } else if(det){
-    el.removeChild(det);
-  }
-  /* Update response div in-place. */
-  var resp=row.querySelector('.resp');
-  if(!resp){resp=document.createElement('div');resp.className='resp';el.appendChild(resp);}
-  resp.innerHTML=normalizeMathDelimiters(contentHtml);
-  row.dataset.raw=rawContent;
-  katexEl(el);
-  var act=row.querySelector('.asst-actions');
-  if(act){
-    act.style.display='';
-    var exIdx=parseInt(id.slice(1));
-    act.innerHTML='<button onclick="llmCopyRow(\''+id+'\')">Copy</button>'+
-                  '<button onclick="llmDeleteExchange('+exIdx+')">Delete</button>';
-  }
-  scrollBottom();
-}
-function llmSetStats(id,text){
-  var row=document.getElementById('row-'+id);
-  if(row){var el=row.querySelector('.asst-stats');if(el)el.textContent=text;}
-}
-function llmCopyRow(id){
-  var row=document.getElementById('row-'+id);
-  if(row){navigator.clipboard.writeText(row.dataset.raw||row.textContent).catch(function(){});}
-}
-function llmCopyChat(){
-  var chat=document.getElementById('chat');
-  if(!chat)return false;
-  navigator.clipboard.writeText(chat.outerHTML).catch(function(){});
-  return true;
-}
 """;
 
     }  // class HtmlRenderer

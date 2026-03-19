@@ -47,6 +47,12 @@ sources = files(
   'ui/engine-dialog.vala',
 )
 
+resources = gnome.compile_resources(
+  'llm-studio-resources',
+  '../data/llm-studio.gresource.xml',
+  source_dir: '../data',
+)
+
 # C glue static library — compiled with webkitgtk-6.0 and cmark-gfm deps.
 glue_inc = include_directories('.')
 glue_lib = static_library(
@@ -58,7 +64,7 @@ glue_lib = static_library(
 
 executable(
   'llm-studio',
-  sources,
+  sources, resources,
   vala_args: [
     '--pkg', 'gtk4',
     '--pkg', 'libadwaita-1',

@@ -17,6 +17,9 @@ namespace LLMStudio.UI {
     extern void llm_webkit_add_message_handler (Gtk.Widget wv, string name,
                                                 LlmJsCallback cb, void* user_data);
 
+    [CCode (cname = "llm_webkit_add_user_script", cheader_filename = "ui/webkit-glue.h")]
+    extern void llm_webkit_add_user_script (Gtk.Widget wv, string source);
+
 
     public class ChatView : Gtk.Box {
 
@@ -46,6 +49,8 @@ namespace LLMStudio.UI {
         private string?  streaming_id    = null;
         private int      msg_id_counter  = 0;
         private bool     think_complete  = false;
+        /* Tool calls captured during the current execute_tool_calls() call. */
+        private GLib.List<ChatToolCall> _round_tool_calls;
 
         public ChatView (BackendManager manager, GLib.Settings settings,
                          ChatHistory history, ToolManager tm)
@@ -75,6 +80,13 @@ namespace LLMStudio.UI {
             web_view.vexpand = true;
             web_view.hexpand = true;
             llm_webkit_add_message_handler (web_view, "llm", on_js_message_cb, this);
+            try {
+                var bytes = GLib.resources_lookup_data ("/dev/llmstudio/chat.js", 0);
+                unowned uint8[] data = bytes.get_data ();
+                llm_webkit_add_user_script (web_view, (string) data);
+            } catch (GLib.Error e) {
+                warning ("Failed to load chat.js resource: %s", e.message);
+            }
             load_blank_page ();
             paned.set_start_child (web_view);
 
@@ -384,15 +396,17 @@ namespace LLMStudio.UI {
                 parse_think_resp (full_content, out think_raw, out resp_raw);
 
                 if (resp_raw == "" && !full_content.contains ("</think>")) {
-                    /* Still inside think block(s) — show raw text live. */
-                    run_js (@"llmSetThink(\"$(streaming_id)\",\"$(j(think_raw))\");");
+                    /* Still inside think block(s) — show rendered text live. */
+                    string think_html = HtmlRenderer.render_markdown (think_raw);
+                    run_js (@"llmSetThink(\"$(streaming_id)\",\"$(j(think_html))\");");
                     return;
                 }
 
                 /* Think block(s) finished — update think once, then stream response. */
                 if (!think_complete) {
                     think_complete = true;
-                    run_js (@"llmSetThink(\"$(streaming_id)\",\"$(j(think_raw))\");");
+                    string think_html = HtmlRenderer.render_markdown (think_raw);
+                    run_js (@"llmSetThink(\"$(streaming_id)\",\"$(j(think_html))\");");
                 }
                 if (resp_raw != "") {
                     string resp_html = HtmlRenderer.render_markdown (resp_raw);
@@ -415,9 +429,10 @@ namespace LLMStudio.UI {
             string think, resp;
             parse_think_resp (full_content, out think, out resp);
 
-            string resp_html = resp != "" ? HtmlRenderer.render_markdown (resp) : "";
+            string think_html = think != "" ? HtmlRenderer.render_markdown (think) : "";
+            string resp_html  = resp  != "" ? HtmlRenderer.render_markdown (resp)  : "";
 
-            run_js (@"llmFinalize(\"$(streaming_id)\",\"$(j(think))\",\"$(j(resp_html))\",\"$(j(resp))\");");
+            run_js (@"llmFinalize(\"$(streaming_id)\",\"$(j(think_html))\",\"$(j(resp_html))\",\"$(j(resp))\");");
 
             if (stats != "")
                 run_js (@"llmSetStats(\"$(streaming_id)\",\"$(j(stats))\");");
@@ -700,6 +715,8 @@ namespace LLMStudio.UI {
             foreach (var att in atts)
                 user_msg.attachments.append (att);
 
+            var msg_rounds = new GLib.List<ChatRound> ();
+
             try {
                 var params = backend_manager.loaded_model?.params ?? new ModelParams ();
                 var model  = backend_manager.loaded_model;
@@ -777,12 +794,29 @@ namespace LLMStudio.UI {
                     /* Tool-call agentic loop: execute tools and continue */
                     if (last_reason == "tool_calls" && tool_iterations < 5) {
                         if (yield execute_tool_calls (messages)) {
+                            /* Save this round before starting the next */
+                            var round = new ChatRound ();
+                            string rt, rr;
+                            parse_think_resp (full_content, out rt, out rr);
+                            round.think = rt; round.response = rr;
+                            foreach (unowned var tc in _round_tool_calls)
+                                round.tool_calls.append (tc);
+                            msg_rounds.append (round);
+
                             tool_iterations++;
+                            run_js (@"llmNewRound(\"$(streaming_id)\");");
                             continue;
                         }
                     }
                     break;
                 }
+
+                /* Save the final round */
+                var final_round = new ChatRound ();
+                string ft, fr;
+                parse_think_resp (full_content, out ft, out fr);
+                final_round.think = ft; final_round.response = fr;
+                msg_rounds.append (final_round);
 
             } catch (Error e) {
                 if (!(e is IOError.CANCELLED)) {
@@ -819,6 +853,8 @@ namespace LLMStudio.UI {
                 var asst_msg = new ChatMessage.assistant (full_content);
                 asst_msg.model_name = model_name;
                 asst_msg.stats_text = stats;
+                foreach (unowned var r in msg_rounds)
+                    asst_msg.rounds.append (r);
                 backend_manager.get_conversation ().append (user_msg);
                 backend_manager.get_conversation ().append (asst_msg);
                 if (chat_history.current != null) {
@@ -848,6 +884,7 @@ namespace LLMStudio.UI {
         private async bool execute_tool_calls (Json.Array messages) {
             string? tc_json = backend_manager.active_backend.pending_tool_call_json;
             if (tc_json == null) return false;
+            _round_tool_calls = new GLib.List<ChatToolCall> ();
             try {
                 var parser = new Json.Parser ();
                 parser.load_from_data (tc_json);
@@ -895,6 +932,11 @@ namespace LLMStudio.UI {
 
                     string result = yield tool_manager.execute_async (
                         tc_name, tc_args, current_request);
+
+                    var tc_record = new ChatToolCall ();
+                    tc_record.display = display;
+                    tc_record.result  = result;
+                    _round_tool_calls.append (tc_record);
 
                     /* Collapse the tool call into a details element */
                     run_js (@"llmAddToolCall(\"$(streaming_id)\",\"$(j(display))\",\"$(j(result))\");");

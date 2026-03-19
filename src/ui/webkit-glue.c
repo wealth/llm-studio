@@ -117,6 +117,19 @@ void llm_webkit_add_message_handler (GtkWidget     *gw,
     webkit_user_content_manager_register_script_message_handler (ucm, name, NULL);
 }
 
+void llm_webkit_add_user_script (GtkWidget *gw, const char *source)
+{
+    WebKitWebView            *wv  = WEBKIT_WEB_VIEW (gw);
+    WebKitUserContentManager *ucm = webkit_web_view_get_user_content_manager (wv);
+    WebKitUserScript *script = webkit_user_script_new (
+        source,
+        WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+        WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+        NULL, NULL);
+    webkit_user_content_manager_add_script (ucm, script);
+    webkit_user_script_unref (script);
+}
+
 void llm_webkit_run_js (GtkWidget *gw, const char *js)
 {
     WebKitWebView *wv = WEBKIT_WEB_VIEW (gw);

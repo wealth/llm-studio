@@ -49,6 +49,34 @@ namespace LLMStudio {
                 mo.set_string_member ("content", m.content);
                 if (m.model_name != "") mo.set_string_member ("model_name", m.model_name);
                 if (m.stats_text != "") mo.set_string_member ("stats_text", m.stats_text);
+                if (m.role == "assistant" && m.rounds.length () > 0) {
+                    var rounds_arr = new Json.Array ();
+                    foreach (unowned var r in m.rounds) {
+                        var ro = new Json.Object ();
+                        if (r.think    != "") ro.set_string_member ("think",    r.think);
+                        if (r.response != "") ro.set_string_member ("response", r.response);
+                        if (r.tool_calls.length () > 0) {
+                            var tca = new Json.Array ();
+                            foreach (unowned var tc in r.tool_calls) {
+                                var tco = new Json.Object ();
+                                tco.set_string_member ("display", tc.display);
+                                tco.set_string_member ("result",  tc.result);
+                                var tcn = new Json.Node (Json.NodeType.OBJECT);
+                                tcn.set_object (tco);
+                                tca.add_element (tcn);
+                            }
+                            var tcan = new Json.Node (Json.NodeType.ARRAY);
+                            tcan.set_array (tca);
+                            ro.set_member ("tool_calls", tcan);
+                        }
+                        var rn = new Json.Node (Json.NodeType.OBJECT);
+                        rn.set_object (ro);
+                        rounds_arr.add_element (rn);
+                    }
+                    var rounds_n = new Json.Node (Json.NodeType.ARRAY);
+                    rounds_n.set_array (rounds_arr);
+                    mo.set_member ("rounds", rounds_n);
+                }
                 if (m.has_attachments ()) {
                     var atts = new Json.Array ();
                     foreach (var a in m.attachments) {
@@ -90,6 +118,26 @@ namespace LLMStudio {
                     }
                     if (mo.has_member ("model_name")) msg.model_name = mo.get_string_member ("model_name");
                     if (mo.has_member ("stats_text")) msg.stats_text = mo.get_string_member ("stats_text");
+                    if (mo.has_member ("rounds")) {
+                        var rarr = mo.get_array_member ("rounds");
+                        for (uint j = 0; j < rarr.get_length (); j++) {
+                            var ro = rarr.get_object_element (j);
+                            var round = new ChatRound ();
+                            if (ro.has_member ("think"))    round.think    = ro.get_string_member ("think");
+                            if (ro.has_member ("response")) round.response = ro.get_string_member ("response");
+                            if (ro.has_member ("tool_calls")) {
+                                var tca = ro.get_array_member ("tool_calls");
+                                for (uint k = 0; k < tca.get_length (); k++) {
+                                    var tco = tca.get_object_element (k);
+                                    var tc = new ChatToolCall ();
+                                    if (tco.has_member ("display")) tc.display = tco.get_string_member ("display");
+                                    if (tco.has_member ("result"))  tc.result  = tco.get_string_member ("result");
+                                    round.tool_calls.append (tc);
+                                }
+                            }
+                            msg.rounds.append (round);
+                        }
+                    }
                     if (mo.has_member ("attachments")) {
                         var aa = mo.get_array_member ("attachments");
                         for (uint j = 0; j < aa.get_length (); j++) {
