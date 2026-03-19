@@ -272,9 +272,24 @@ namespace LLMStudio.UI {
             visit_row.append (visit_sw);
             tools_content.append (visit_row);
 
+            var dt_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            dt_row.margin_top    = 4;
+            dt_row.margin_bottom = 2;
+            var dt_lbl = new Gtk.Label ("Date / Time");
+            dt_lbl.halign  = Gtk.Align.START;
+            dt_lbl.hexpand = true;
+            dt_lbl.add_css_class ("body");
+            var dt_sw = new Gtk.Switch ();
+            dt_sw.valign = Gtk.Align.CENTER;
+            dt_row.append (dt_lbl);
+            dt_row.append (dt_sw);
+            tools_content.append (dt_row);
+
             tool_manager.bind_property ("duckduckgo-enabled",    ddg_sw,   "active",
                 GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
             tool_manager.bind_property ("visit-website-enabled", visit_sw, "active",
+                GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
+            tool_manager.bind_property ("datetime-enabled",      dt_sw,    "active",
                 GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
 
             outer_box.append (make_collapsible_section ("Tools", tools_content, true));

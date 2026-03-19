@@ -4,6 +4,7 @@ namespace LLMStudio {
 
         public bool duckduckgo_enabled    { get; set; default = false; }
         public bool visit_website_enabled { get; set; default = false; }
+        public bool datetime_enabled      { get; set; default = false; }
 
         private Soup.Session http_session;
 
@@ -13,12 +14,17 @@ namespace LLMStudio {
 
             settings.bind ("tool-duckduckgo-enabled",    this, "duckduckgo-enabled",    GLib.SettingsBindFlags.DEFAULT);
             settings.bind ("tool-visit-website-enabled", this, "visit-website-enabled", GLib.SettingsBindFlags.DEFAULT);
+            settings.bind ("tool-datetime-enabled",      this, "datetime-enabled",      GLib.SettingsBindFlags.DEFAULT);
         }
 
         /* Returns an array of enabled tool definitions, or null if none are enabled. */
         public Json.Array? get_tools_array () {
-            if (!duckduckgo_enabled && !visit_website_enabled) return null;
+            if (!duckduckgo_enabled && !visit_website_enabled && !datetime_enabled) return null;
             var arr = new Json.Array ();
+            if (datetime_enabled)
+                arr.add_element (make_tool_def_noargs (
+                    "get_datetime",
+                    "Get the current date, time, and timezone on the user's system."));
             if (duckduckgo_enabled)
                 arr.add_element (make_tool_def (
                     "duckduckgo_search",
@@ -41,6 +47,8 @@ namespace LLMStudio {
                 parser.load_from_data (arguments_json);
                 var args = parser.get_root ().get_object ();
                 switch (name) {
+                    case "get_datetime":
+                        return get_current_datetime ();
                     case "duckduckgo_search":
                         return yield search_duckduckgo_async (
                             args.get_string_member ("query"), cancel);
@@ -56,6 +64,12 @@ namespace LLMStudio {
         }
 
         // ── Private implementation ────────────────────────────────────────────
+
+        private static string get_current_datetime () {
+            var now = new DateTime.now_local ();
+            var tz  = now.get_timezone_abbreviation ();
+            return now.format ("Date: %A, %B %-d, %Y\nTime: %H:%M:%S %Z (") + tz + ")";
+        }
 
         /* Randomized real browser User-Agent strings to avoid DDG bot detection */
         private static string[] USER_AGENTS = {
@@ -198,6 +212,22 @@ namespace LLMStudio {
                 s = re4.replace (s, -1, 0, "\n\n");
             } catch (Error e) {}
             return s.strip ();
+        }
+
+        private static Json.Node make_tool_def_noargs (string name, string description) {
+            var b = new Json.Builder ();
+            b.begin_object ();
+              b.set_member_name ("type");     b.add_string_value ("function");
+              b.set_member_name ("function"); b.begin_object ();
+                b.set_member_name ("name");        b.add_string_value (name);
+                b.set_member_name ("description"); b.add_string_value (description);
+                b.set_member_name ("parameters");  b.begin_object ();
+                  b.set_member_name ("type");       b.add_string_value ("object");
+                  b.set_member_name ("properties"); b.begin_object (); b.end_object ();
+                b.end_object ();
+              b.end_object ();
+            b.end_object ();
+            return b.get_root ();
         }
 
         private static Json.Node make_tool_def (string name, string description,

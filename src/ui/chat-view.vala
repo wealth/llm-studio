@@ -997,6 +997,8 @@ namespace LLMStudio.UI {
                 parser.load_from_data (args_json);
                 var args = parser.get_root ().get_object ();
                 switch (name) {
+                    case "get_datetime":
+                        return "\xf0\x9f\x95\x90 get_datetime";
                     case "duckduckgo_search":
                         return "\xf0\x9f\x94\x8d " + (args.has_member ("query")
                             ? args.get_string_member ("query") : name);
