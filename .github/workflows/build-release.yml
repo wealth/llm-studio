@@ -49,6 +49,15 @@ jobs:
       - name: Install to staging directory
         run: DESTDIR="$PWD/staging" ninja -C build install
 
+      - name: Resolve cmark package names
+        id: cmark
+        run: |
+          CMARK_PKG=$(dpkg -S libcmark-gfm.so | head -1 | cut -d: -f1)
+          CMARK_EXT_PKG=$(dpkg -S libcmark-gfm-extensions.so | head -1 | cut -d: -f1)
+          echo "pkg=$CMARK_PKG" >> "$GITHUB_OUTPUT"
+          echo "ext_pkg=$CMARK_EXT_PKG" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $CMARK_PKG, $CMARK_EXT_PKG"
+
       - name: Build .deb package
         run: |
           fpm -s dir -t deb \
@@ -64,8 +73,8 @@ jobs:
             --depends "libsoup-3.0-0 | libsoup3.0-0" \
             --depends libjson-glib-1.0-0 \
             --depends libwebkitgtk-6.0-4 \
-            --depends libcmark-gfm0 \
-            --depends libcmark-gfm-extensions0 \
+            --depends "${{ steps.cmark.outputs.pkg }}" \
+            --depends "${{ steps.cmark.outputs.ext_pkg }}" \
             --depends libjs-katex \
             --depends fonts-katex \
             --category "Development" \
