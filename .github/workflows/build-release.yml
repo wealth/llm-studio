@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -26,6 +26,20 @@ jobs:
             libjs-katex fonts-katex \
             desktop-file-utils
 
+      - name: Install packaging tools
+        run: |
+          sudo apt-get install -y ruby ruby-dev rpm
+          sudo gem install fpm --no-document
+
+      - name: Generate version
+        id: version
+        run: |
+          VERSION="0.1.0+git$(date -u +'%Y%m%d').$(echo $GITHUB_SHA | head -c 7)"
+          TAG="v$(date -u +'%Y.%m.%d')-$(echo $GITHUB_SHA | head -c 7)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION  Tag: $TAG"
+
       - name: Configure
         run: meson setup build --buildtype=release --prefix=/usr
 
@@ -35,17 +49,49 @@ jobs:
       - name: Install to staging directory
         run: DESTDIR="$PWD/staging" ninja -C build install
 
-      - name: Package tarball
+      - name: Build .deb package
         run: |
-          cd staging
-          tar czf ../llm-studio-linux-x86_64.tar.gz .
+          fpm -s dir -t deb \
+            -n llm-studio \
+            -v "${{ steps.version.outputs.version }}" \
+            --description "Run and chat with local large language models" \
+            --url "https://github.com/${{ github.repository }}" \
+            --license "MIT" \
+            --maintainer "${{ github.repository_owner }}" \
+            --architecture amd64 \
+            --depends libgtk-4-1 \
+            --depends libadwaita-1-0 \
+            --depends "libsoup-3.0-0 | libsoup3.0-0" \
+            --depends libjson-glib-1.0-0 \
+            --depends libwebkitgtk-6.0-4 \
+            --depends libcmark-gfm0 \
+            --depends libcmark-gfm-extensions0 \
+            --depends libjs-katex \
+            --depends fonts-katex \
+            --category "Development" \
+            --deb-no-default-config-files \
+            -C staging \
+            -p llm-studio_amd64.deb
 
-      - name: Generate version tag
-        id: version
+      - name: Build .rpm package
         run: |
-          VERSION="v$(date -u +'%Y.%m.%d')-$(echo $GITHUB_SHA | head -c 7)"
-          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
+          fpm -s dir -t rpm \
+            -n llm-studio \
+            -v "${{ steps.version.outputs.version }}" \
+            --description "Run and chat with local large language models" \
+            --url "https://github.com/${{ github.repository }}" \
+            --license "MIT" \
+            --maintainer "${{ github.repository_owner }}" \
+            --architecture x86_64 \
+            --depends gtk4 \
+            --depends libadwaita \
+            --depends libsoup3 \
+            --depends json-glib \
+            --depends webkitgtk6.0 \
+            --depends cmark-gfm \
+            --category "Development" \
+            -C staging \
+            -p llm-studio_x86_64.rpm
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -55,21 +101,16 @@ jobs:
           body: |
             Automated build from commit ${{ github.sha }}.
 
-            ### Installation
+            ### Install on Debian/Ubuntu
             ```bash
-            # Extract to system
-            sudo tar xzf llm-studio-linux-x86_64.tar.gz -C /
-
-            # Or extract somewhere and run directly
-            tar xzf llm-studio-linux-x86_64.tar.gz -C ~/llm-studio
-            ~/llm-studio/usr/bin/llm-studio
+            sudo apt install ./llm-studio_amd64.deb
             ```
 
-            ### Runtime dependencies
+            ### Install on Fedora/RHEL
             ```bash
-            sudo apt install libgtk-4-1 libadwaita-1-0 libsoup-3.0-0 \
-              libjson-glib-1.0-0 libwebkitgtk-6.0-4 libcmark-gfm0 \
-              libcmark-gfm-extensions0 libjs-katex fonts-katex
+            sudo dnf install ./llm-studio_x86_64.rpm
             ```
-          files: llm-studio-linux-x86_64.tar.gz
+          files: |
+            llm-studio_amd64.deb
+            llm-studio_x86_64.rpm
           generate_release_notes: true
