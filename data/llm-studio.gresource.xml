@@ -2,5 +2,6 @@
 <gresources>
   <gresource prefix="/dev/llmstudio">
     <file>chat.js</file>
+    <file>syntax-highlight.js</file>
   </gresource>
 </gresources>

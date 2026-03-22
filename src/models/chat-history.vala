@@ -55,6 +55,7 @@ namespace LLMStudio {
                         var ro = new Json.Object ();
                         if (r.think    != "") ro.set_string_member ("think",    r.think);
                         if (r.response != "") ro.set_string_member ("response", r.response);
+                        if (r.think_duration >= 0) ro.set_double_member ("think_duration", r.think_duration);
                         if (r.tool_calls.length () > 0) {
                             var tca = new Json.Array ();
                             foreach (unowned var tc in r.tool_calls) {
@@ -123,8 +124,9 @@ namespace LLMStudio {
                         for (uint j = 0; j < rarr.get_length (); j++) {
                             var ro = rarr.get_object_element (j);
                             var round = new ChatRound ();
-                            if (ro.has_member ("think"))    round.think    = ro.get_string_member ("think");
-                            if (ro.has_member ("response")) round.response = ro.get_string_member ("response");
+                            if (ro.has_member ("think"))          round.think          = ro.get_string_member ("think");
+                            if (ro.has_member ("response"))       round.response       = ro.get_string_member ("response");
+                            if (ro.has_member ("think_duration")) round.think_duration = ro.get_double_member ("think_duration");
                             if (ro.has_member ("tool_calls")) {
                                 var tca = ro.get_array_member ("tool_calls");
                                 for (uint k = 0; k < tca.get_length (); k++) {

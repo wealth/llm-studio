@@ -90,7 +90,7 @@ namespace LLMStudio {
                 int found = 0;
 
                 for (uint64 i = 0; i < n_kv; i++) {
-                    if (found >= 7) break;
+                    if (found >= 8) break;
 
                     string key      = read_string (dis, version);
                     uint32 val_type = dis.read_uint32 ();
@@ -132,6 +132,7 @@ namespace LLMStudio {
                         found++;
                     } else if (key == "tokenizer.chat_template" && val_type == GGUF_TYPE_STRING) {
                         string tmpl = read_string (dis, version);
+                        model.default_chat_template = tmpl;
                         model.has_tools = tmpl.contains ("tool_call")
                             || tmpl.contains ("function_call")
                             || tmpl.contains ("<tool_response>")

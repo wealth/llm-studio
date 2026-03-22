@@ -49,6 +49,8 @@ namespace LLMStudio.UI {
         private string?  streaming_id    = null;
         private int      msg_id_counter  = 0;
         private bool     think_complete  = false;
+        private int64    think_start_us  = -1;
+        private double   last_think_duration = -1;
         /* Tool calls captured during the current execute_tool_calls() call. */
         private GLib.List<ChatToolCall> _round_tool_calls;
 
@@ -86,6 +88,13 @@ namespace LLMStudio.UI {
                 llm_webkit_add_user_script (web_view, (string) data);
             } catch (GLib.Error e) {
                 warning ("Failed to load chat.js resource: %s", e.message);
+            }
+            try {
+                var hl_bytes = GLib.resources_lookup_data ("/dev/llmstudio/syntax-highlight.js", 0);
+                unowned uint8[] hl_data = hl_bytes.get_data ();
+                llm_webkit_add_user_script (web_view, (string) hl_data);
+            } catch (GLib.Error e) {
+                warning ("Failed to load syntax-highlight.js resource: %s", e.message);
             }
             load_blank_page ();
             paned.set_start_child (web_view);
@@ -407,6 +416,12 @@ namespace LLMStudio.UI {
                     think_complete = true;
                     string think_html = HtmlRenderer.render_markdown (think_raw);
                     run_js (@"llmSetThink(\"$(streaming_id)\",\"$(j(think_html))\");");
+                    /* Collapse and show duration */
+                    last_think_duration = 0;
+                    if (think_start_us >= 0)
+                        last_think_duration = (GLib.get_monotonic_time () - think_start_us) / 1000000.0;
+                    string duration = "Thought for %.1fs".printf (last_think_duration);
+                    run_js (@"llmCollapseThink(\"$(streaming_id)\",\"$(j(duration))\");");
                 }
                 if (resp_raw != "") {
                     string resp_html = HtmlRenderer.render_markdown (resp_raw);
@@ -432,6 +447,11 @@ namespace LLMStudio.UI {
             string think_html = think != "" ? HtmlRenderer.render_markdown (think) : "";
             string resp_html  = resp  != "" ? HtmlRenderer.render_markdown (resp)  : "";
 
+            /* Ensure think is collapsed with duration before finalize (safety net) */
+            if (think != "" && last_think_duration >= 0) {
+                string dur = "Thought for %.1fs".printf (last_think_duration);
+                run_js (@"llmCollapseThink(\"$(streaming_id)\",\"$(j(dur))\");");
+            }
             run_js (@"llmFinalize(\"$(streaming_id)\",\"$(j(think_html))\",\"$(j(resp_html))\",\"$(j(resp))\");");
 
             if (stats != "")
@@ -439,6 +459,7 @@ namespace LLMStudio.UI {
 
             streaming_id   = null;
             think_complete = false;
+            think_start_us = -1;
         }
 
         /* ── Event handlers ──────────────────────────────────────────── */
@@ -689,7 +710,9 @@ namespace LLMStudio.UI {
             run_js (@"llmAddUser($(exchange_idx),\"$(j(user_html_content))\",\"$(j(atts_json))\");");
 
             /* Create assistant message slot */
-            think_complete = false;
+            think_complete      = false;
+            think_start_us      = -1;
+            last_think_duration = -1;
 
             string model_name = humanized_model_name (backend_manager.loaded_model);
             run_js (@"llmStartAssistant(\"$(streaming_id)\",\"$(j(model_name))\");");
@@ -760,10 +783,12 @@ namespace LLMStudio.UI {
 
                 while (true) {
                     /* Reset per-iteration streaming state */
-                    full_content    = "";
-                    last_reason     = null;
-                    stream_complete = false;
-                    think_complete  = false;
+                    full_content        = "";
+                    last_reason         = null;
+                    stream_complete     = false;
+                    think_complete      = false;
+                    think_start_us      = -1;
+                    last_think_duration = -1;
 
                     yield backend_manager.active_backend.chat_completion_stream (
                         messages, params,
@@ -773,8 +798,11 @@ namespace LLMStudio.UI {
                                     first_token_us = GLib.get_monotonic_time ();
                                 token_count++;
                                 full_content += chunk;
-                                bool in_think = full_content.has_prefix ("<think>") &&
+                                bool has_think = full_content.has_prefix ("<think>");
+                                bool in_think = has_think &&
                                                 full_content.index_of ("</think>") < 0;
+                                if (has_think && think_start_us < 0)
+                                    think_start_us = GLib.get_monotonic_time ();
                                 if (!in_think) {
                                     if (response_start_us < 0)
                                         response_start_us = GLib.get_monotonic_time ();
@@ -799,11 +827,17 @@ namespace LLMStudio.UI {
                             string rt, rr;
                             parse_think_resp (full_content, out rt, out rr);
                             round.think = rt; round.response = rr;
+                            round.think_duration = last_think_duration;
                             foreach (unowned var tc in _round_tool_calls)
                                 round.tool_calls.append (tc);
                             msg_rounds.append (round);
 
                             tool_iterations++;
+                            /* Collapse think with duration before starting new round */
+                            if (rt != "" && last_think_duration >= 0) {
+                                string dur = "Thought for %.1fs".printf (last_think_duration);
+                                run_js (@"llmCollapseThink(\"$(streaming_id)\",\"$(j(dur))\");");
+                            }
                             run_js (@"llmNewRound(\"$(streaming_id)\");");
                             continue;
                         }
@@ -811,11 +845,17 @@ namespace LLMStudio.UI {
                     break;
                 }
 
+                /* Compute think duration if streaming path missed it */
+                if (last_think_duration < 0 && think_start_us >= 0) {
+                    last_think_duration = (GLib.get_monotonic_time () - think_start_us) / 1000000.0;
+                }
+
                 /* Save the final round */
                 var final_round = new ChatRound ();
                 string ft, fr;
                 parse_think_resp (full_content, out ft, out fr);
                 final_round.think = ft; final_round.response = fr;
+                final_round.think_duration = last_think_duration;
                 msg_rounds.append (final_round);
 
             } catch (Error e) {

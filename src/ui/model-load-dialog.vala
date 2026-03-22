@@ -40,6 +40,8 @@ namespace LLMStudio.UI {
         // System prompt
         private Gtk.TextView system_prompt_view;
 
+
+
         public signal void load_requested (ModelInfo model, ModelParams params);
 
         public ModelLoadDialog (ModelInfo model, Gtk.Window parent) {

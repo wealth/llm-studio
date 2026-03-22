@@ -21,6 +21,7 @@ namespace LLMStudio.UI {
         private Gtk.Label  max_tokens_val;
 
         private bool       updating_ui = false;
+        private uint       save_timeout = 0;
 
         public ChatParamsPanel (BackendManager bm, ToolManager tm) {
             Object (orientation: Gtk.Orientation.VERTICAL, spacing: 0);
@@ -176,8 +177,10 @@ namespace LLMStudio.UI {
             system_prompt_view.left_margin   = 10;
             system_prompt_view.right_margin  = 10;
             system_prompt_view.buffer.changed.connect (() => {
-                if (!updating_ui && current_model != null)
+                if (!updating_ui && current_model != null) {
                     current_model.params.system_prompt = system_prompt_view.buffer.text;
+                    schedule_save ();
+                }
             });
             sys_scroll.set_child (system_prompt_view);
             sys_frame.append (sys_scroll);
@@ -193,8 +196,10 @@ namespace LLMStudio.UI {
                 out temp_scale, out temp_val);
             temp_scale.value_changed.connect (() => {
                 temp_val.label = "%.2f".printf (temp_scale.get_value ());
-                if (!updating_ui && current_model != null)
+                if (!updating_ui && current_model != null) {
                     current_model.params.temperature = temp_scale.get_value ();
+                    schedule_save ();
+                }
             });
             samp_content.append (temp_row);
 
@@ -202,8 +207,10 @@ namespace LLMStudio.UI {
                 out top_p_scale, out top_p_val);
             top_p_scale.value_changed.connect (() => {
                 top_p_val.label = "%.2f".printf (top_p_scale.get_value ());
-                if (!updating_ui && current_model != null)
+                if (!updating_ui && current_model != null) {
                     current_model.params.top_p = top_p_scale.get_value ();
+                    schedule_save ();
+                }
             });
             samp_content.append (top_p_row);
 
@@ -211,8 +218,10 @@ namespace LLMStudio.UI {
                 out top_k_scale, out top_k_val);
             top_k_scale.value_changed.connect (() => {
                 top_k_val.label = "%.0f".printf (top_k_scale.get_value ());
-                if (!updating_ui && current_model != null)
+                if (!updating_ui && current_model != null) {
                     current_model.params.top_k = (int) top_k_scale.get_value ();
+                    schedule_save ();
+                }
             });
             samp_content.append (top_k_row);
 
@@ -220,8 +229,10 @@ namespace LLMStudio.UI {
                 out rep_pen_scale, out rep_pen_val);
             rep_pen_scale.value_changed.connect (() => {
                 rep_pen_val.label = "%.2f".printf (rep_pen_scale.get_value ());
-                if (!updating_ui && current_model != null)
+                if (!updating_ui && current_model != null) {
                     current_model.params.repeat_penalty = rep_pen_scale.get_value ();
+                    schedule_save ();
+                }
             });
             samp_content.append (rep_pen_row);
 
@@ -235,8 +246,10 @@ namespace LLMStudio.UI {
                 out max_tokens_scale, out max_tokens_val);
             max_tokens_scale.value_changed.connect (() => {
                 max_tokens_val.label = "%.0f".printf (max_tokens_scale.get_value ());
-                if (!updating_ui && current_model != null)
+                if (!updating_ui && current_model != null) {
                     current_model.params.max_tokens = (int) max_tokens_scale.get_value ();
+                    schedule_save ();
+                }
             });
             resp_content.append (max_tokens_row);
 
@@ -303,6 +316,16 @@ namespace LLMStudio.UI {
             content_stack.visible_child_name = "empty";
         }
 
+        private void schedule_save () {
+            if (current_model == null) return;
+            if (save_timeout != 0) GLib.Source.remove (save_timeout);
+            save_timeout = GLib.Timeout.add (800, () => {
+                if (current_model != null) current_model.save_params ();
+                save_timeout = 0;
+                return false;
+            });
+        }
+
         private void on_model_loaded (ModelInfo model) {
             updating_ui   = true;
             current_model = null;
@@ -332,6 +355,11 @@ namespace LLMStudio.UI {
         }
 
         private void on_model_unloaded () {
+            if (save_timeout != 0) {
+                GLib.Source.remove (save_timeout);
+                save_timeout = 0;
+                if (current_model != null) current_model.save_params ();
+            }
             current_model = null;
             content_stack.visible_child_name = "empty";
         }

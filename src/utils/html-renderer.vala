@@ -203,11 +203,15 @@ namespace LLMStudio {
             var sb = new StringBuilder ();
 
             if (think_html != "") {
-                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" open>");
+                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\">");
+                if (round.think_duration >= 0)
+                    sb.append ("<summary>Thought for %.1fs</summary>".printf (round.think_duration));
+                else
+                    sb.append ("<summary>Thought</summary>");
             } else {
                 sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" hidden>");
+                sb.append ("<summary>Thinking\u2026</summary>");
             }
-            sb.append ("<summary>Thinking\u2026</summary>");
             sb.append ("<div class=\"tk\" id=\"asst-" + rid + "-think-body\">");
             sb.append (think_html);
             sb.append ("</div></details>");
@@ -255,11 +259,12 @@ namespace LLMStudio {
             var sb = new StringBuilder ();
 
             if (think_html != "") {
-                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" open>");
+                sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\">");
+                sb.append ("<summary>Thought</summary>");
             } else {
                 sb.append ("<details class=\"think\" id=\"asst-" + rid + "-think\" hidden>");
+                sb.append ("<summary>Thinking\u2026</summary>");
             }
-            sb.append ("<summary>Thinking\u2026</summary>");
             sb.append ("<div class=\"tk\" id=\"asst-" + rid + "-think-body\">");
             sb.append (think_html);
             sb.append ("</div></details>");
@@ -324,6 +329,7 @@ details.tool-call pre{font-size:11px;max-height:160px;overflow-y:auto;
 details.think{background:var(--think-bg);border:1px solid var(--border);
   border-radius:8px;padding:2px 10px;margin-bottom:10px;
   font-size:13px;color:var(--dim)}
+details.think ul,details.think ol{list-style-position:inside}
 details.think .katex,details.think .katex-display{color:var(--fg)}
 details.think summary{cursor:pointer;padding:4px 0;font-style:italic}
 details.think[open] summary{margin-bottom:4px}
@@ -341,6 +347,14 @@ details.think[open] summary{margin-bottom:4px}
 .asst-content pre{background:var(--code-bg);border-radius:8px;
   padding:12px 14px;overflow-x:auto;margin:.6em 0}
 .asst-content pre code{background:none;padding:0;font-size:.86em;line-height:1.5}
+.hl-kw{color:#8839ef}.hl-str{color:#40a02b}.hl-cm{color:var(--dim);font-style:italic}
+.hl-num{color:#fe640b}.hl-fn{color:#1e66f5}.hl-op{color:#7c7f93}
+.hl-bi{color:#d20f39}.hl-dc{color:#e64553}.hl-re{color:#df8e1d}
+@media(prefers-color-scheme:dark){
+.hl-kw{color:#cba6f7}.hl-str{color:#a6e3a1}.hl-cm{color:var(--dim)}
+.hl-num{color:#fab387}.hl-fn{color:#89b4fa}.hl-op{color:#9399b2}
+.hl-bi{color:#f38ba8}.hl-dc{color:#eba0ac}.hl-re{color:#f9e2af}
+}
 .asst-content blockquote{border-left:3px solid var(--dim);margin:.6em 0;
   padding-left:12px;color:var(--dim)}
 .asst-content hr{border:none;border-top:1px solid var(--border);margin:.8em 0}

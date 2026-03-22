@@ -63,6 +63,9 @@ namespace LLMStudio {
         // Thinking mode (for models that support it, e.g. Qwen3)
         public bool   enable_thinking  { get; set; default = true; }
 
+        // Jinja chat template override (empty = use model default)
+        public string chat_template    { get; set; default = "";   }
+
         // Vision: load mmproj sidecar (on by default when model supports it)
         public bool   enable_vision    { get; set; default = true; }
 
@@ -94,6 +97,7 @@ namespace LLMStudio {
             builder.set_member_name ("system_prompt");     builder.add_string_value (system_prompt);
             builder.set_member_name ("enable_thinking");   builder.add_boolean_value (enable_thinking);
             builder.set_member_name ("enable_vision");     builder.add_boolean_value (enable_vision);
+            builder.set_member_name ("chat_template");    builder.add_string_value (chat_template);
             builder.end_object ();
             return builder.get_root ();
         }
@@ -125,6 +129,7 @@ namespace LLMStudio {
             if (obj.has_member ("system_prompt"))     p.system_prompt     = obj.get_string_member ("system_prompt");
             if (obj.has_member ("enable_thinking"))   p.enable_thinking   = obj.get_boolean_member ("enable_thinking");
             if (obj.has_member ("enable_vision"))     p.enable_vision     = obj.get_boolean_member ("enable_vision");
+            if (obj.has_member ("chat_template"))    p.chat_template     = obj.get_string_member ("chat_template");
             return p;
         }
 
@@ -155,6 +160,7 @@ namespace LLMStudio {
             p.system_prompt     = system_prompt;
             p.enable_thinking   = enable_thinking;
             p.enable_vision     = enable_vision;
+            p.chat_template     = chat_template;
             return p;
         }
     }
@@ -174,6 +180,7 @@ namespace LLMStudio {
         public bool        has_vision   { get; set; default = false; }
         public bool        has_tools    { get; set; default = false; }
         public bool        has_thinking { get; set; default = false; }
+        public string?     default_chat_template { get; set; default = null; }
         public ModelParams params     { get; set; }
 
         construct {
@@ -529,8 +536,9 @@ namespace LLMStudio {
 
     /* One agentic round: optional think block, zero or more tool calls, optional response. */
     public class ChatRound : Object {
-        public string think    { get; set; default = ""; }
-        public string response { get; set; default = ""; }
+        public string think          { get; set; default = ""; }
+        public string response       { get; set; default = ""; }
+        public double think_duration { get; set; default = -1; }  // seconds, -1 = unknown
         /* Field (not property) to avoid GLib.List "duplicating list" Vala bug. */
         public GLib.List<ChatToolCall> tool_calls;
         construct { tool_calls = new GLib.List<ChatToolCall> (); }

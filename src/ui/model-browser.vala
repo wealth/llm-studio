@@ -10,6 +10,8 @@ namespace LLMStudio.UI {
         private Gtk.Stack        content_stack;
         private Gtk.SearchEntry  search_entry;
         private Gtk.Label        model_count_lbl;
+        private Gtk.Paned        paned;
+        private ModelSettingsPanel settings_panel;
 
         private string  filter_text = "";
         private string  sort_mode   = "name";   // "name" | "size"
@@ -102,10 +104,26 @@ namespace LLMStudio.UI {
             append (toolbar);
             append (new Gtk.Separator (Gtk.Orientation.HORIZONTAL));
 
-            // ── Content stack ─────────────────────────────────────────────
+            // ── Paned: content stack + settings panel ─────────────────────
+            paned = new Gtk.Paned (Gtk.Orientation.HORIZONTAL);
+            paned.vexpand            = true;
+            paned.resize_start_child = true;
+            paned.resize_end_child   = false;
+            paned.shrink_start_child = false;
+            paned.shrink_end_child   = false;
+            append (paned);
+
             content_stack = new Gtk.Stack ();
             content_stack.vexpand = true;
-            append (content_stack);
+            paned.start_child = content_stack;
+
+            settings_panel = new ModelSettingsPanel ();
+            settings_panel.visible = false;
+            settings_panel.close_requested.connect (() => {
+                settings_panel.clear ();
+                settings_panel.visible = false;
+            });
+            paned.end_child = settings_panel;
 
             // Empty state
             empty_state = new Adw.StatusPage ();
@@ -307,6 +325,16 @@ namespace LLMStudio.UI {
             box.append (size_lbl);
 
             // ── Actions ───────────────────────────────────────────────────
+            var gear_btn = new Gtk.Button.from_icon_name ("emblem-system-symbolic");
+            gear_btn.add_css_class ("flat");
+            gear_btn.tooltip_text = "Model settings";
+            gear_btn.valign = Gtk.Align.CENTER;
+            gear_btn.clicked.connect (() => {
+                settings_panel.show_model (model);
+                settings_panel.visible = true;
+            });
+            box.append (gear_btn);
+
             bool is_loaded = backend_manager.loaded_model?.path == model.path;
 
             var load_btn = new Gtk.Button.from_icon_name (

@@ -94,6 +94,10 @@ namespace LLMStudio {
                 argv.append_val ("--seed"); argv.append_val (params.seed.to_string ());
             }
 
+            if (params.chat_template != "") {
+                argv.append_val ("--chat-template"); argv.append_val (params.chat_template);
+            }
+
             if (model.has_vision && params.enable_vision) {
                 var mmproj = find_mmproj (model.path);
                 if (mmproj != "") {

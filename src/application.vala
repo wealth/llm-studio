@@ -100,26 +100,20 @@ namespace LLMStudio {
                 });
                 dlg.present ();
             } else if (release != null && engine_manager.is_newer (release.tag)) {
-                var skip_tag = settings.get_string ("engine-skip-version");
-                if (skip_tag == release.tag) return;
-
-                var dlg = new UI.EngineUpdateDialog (
-                    release, engine_manager, main_window,
-                    engine_manager.installed_version);
-
-                dlg.update_accepted.connect (() => {
-                    var install_dlg = new UI.EngineInstallDialog (
-                        release, engine_manager, detected_gpu, main_window);
-                    install_dlg.engine_ready.connect (() => {
+                // Auto-update in background
+                var old_version = engine_manager.installed_version ?? "unknown";
+                var new_tag = release.tag;
+                try {
+                    // Re-fetch release for detected GPU variant
+                    var gpu_release = yield engine_manager.check_latest (detected_gpu, null);
+                    if (gpu_release != null) {
+                        yield engine_manager.install_release (gpu_release, null);
                         main_window.show_toast (
-                            "Engine updated to %s!".printf (release.tag));
-                    });
-                    install_dlg.present ();
-                });
-                dlg.update_skipped.connect ((tag) => {
-                    settings.set_string ("engine-skip-version", tag);
-                });
-                dlg.present ();
+                            "llama.cpp updated from %s to %s".printf (old_version, new_tag));
+                    }
+                } catch (Error ue) {
+                    warning ("Background engine update failed: %s", ue.message);
+                }
             }
         }
 

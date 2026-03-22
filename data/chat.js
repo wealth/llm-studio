@@ -13,7 +13,10 @@ function katexEl(el){
     try{renderMathInElement(el,KATEX_OPTS);}catch(e){console.error(e);}
   }
 }
-function llmRenderAll(){katexEl(document.body);}
+function llmRenderAll(){
+  if(typeof hlElement!=='undefined')hlElement(document.body);
+  katexEl(document.body);
+}
 function scrollBottom(){if (window.scrollY != 0) window.scrollTo(0,document.body.scrollHeight);}
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function llmClear(){document.getElementById('chat').innerHTML='';}
@@ -121,12 +124,16 @@ function llmStartAssistant(id,model){
   scrollBottom();
 }
 function llmNewRound(id){
-  /* Collapse current round's think (keep visible if it had content),
-     clear the loading dots from resp, then append a fresh round.     */
+  /* Collapse current round's think, clear loading dots, append fresh round. */
   var curRid=_rid(id);
   var curThink=document.getElementById('asst-'+curRid+'-think');
   var curResp =document.getElementById('asst-'+curRid+'-resp');
-  /* leave previous round's think open — don't collapse it */
+  /* Ensure previous round's think is collapsed (safety net). */
+  if(curThink&&!curThink.hidden){
+    curThink.open=false;
+    var s=curThink.querySelector('summary');
+    if(s&&s.textContent===('Thinking\u2026'))s.textContent='Thought';
+  }
   if(curResp)curResp.innerHTML='';
   var nextR=(msgRounds[id]||1)+1;
   msgRounds[id]=nextR;
@@ -148,10 +155,19 @@ function llmSetThink(id,html){
   think.open=true;
   scrollBottom();
 }
+function llmCollapseThink(id,durationText){
+  var rid=_rid(id);
+  var think=document.getElementById('asst-'+rid+'-think');
+  if(!think)return;
+  think.open=false;
+  var summary=think.querySelector('summary');
+  if(summary)summary.textContent=durationText;
+}
 function llmSetContent(id,html){
   var resp=document.getElementById('asst-'+_rid(id)+'-resp');
   if(!resp)return;
   resp.innerHTML=html;
+  if(typeof hlElement!=='undefined')hlElement(resp);
   katexEl(resp);
   scrollBottom();
 }
@@ -172,9 +188,18 @@ function llmFinalize(id,thinkHtml,contentHtml,rawContent){
   var resp=document.getElementById('asst-'+rid+'-resp');
   var acts=document.getElementById('asst-'+id+'-acts');
   var row =document.getElementById('asst-'+id);
-  /* Do NOT touch think or tool-call elements — leave them as rendered during streaming. */
+  /* Collapse all think blocks in this message (current + previous rounds). */
+  if(row){
+    var thinks=row.querySelectorAll('details.think:not([hidden])');
+    for(var i=0;i<thinks.length;i++){
+      thinks[i].open=false;
+      var s=thinks[i].querySelector('summary');
+      if(s&&s.textContent===('Thinking\u2026'))s.textContent='Thought';
+    }
+  }
   if(resp){
     resp.innerHTML=contentHtml;
+    if(typeof hlElement!=='undefined')hlElement(resp);
     katexEl(resp);
   }
   if(row&&rawContent)row.dataset.raw=rawContent;

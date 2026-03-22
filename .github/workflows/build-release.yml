@@ -1,0 +1,75 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build valac \
+            libgtk-4-dev libadwaita-1-dev \
+            libsoup-3.0-dev libjson-glib-dev \
+            libwebkitgtk-6.0-dev \
+            libcmark-gfm-dev libcmark-gfm-extensions-dev \
+            libjs-katex fonts-katex \
+            desktop-file-utils
+
+      - name: Configure
+        run: meson setup build --buildtype=release --prefix=/usr
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Install to staging directory
+        run: DESTDIR="$PWD/staging" ninja -C build install
+
+      - name: Package tarball
+        run: |
+          cd staging
+          tar czf ../llm-studio-linux-x86_64.tar.gz .
+
+      - name: Generate version tag
+        id: version
+        run: |
+          VERSION="v$(date -u +'%Y.%m.%d')-$(echo $GITHUB_SHA | head -c 7)"
+          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: LLM Studio ${{ steps.version.outputs.tag }}
+          body: |
+            Automated build from commit ${{ github.sha }}.
+
+            ### Installation
+            ```bash
+            # Extract to system
+            sudo tar xzf llm-studio-linux-x86_64.tar.gz -C /
+
+            # Or extract somewhere and run directly
+            tar xzf llm-studio-linux-x86_64.tar.gz -C ~/llm-studio
+            ~/llm-studio/usr/bin/llm-studio
+            ```
+
+            ### Runtime dependencies
+            ```bash
+            sudo apt install libgtk-4-1 libadwaita-1-0 libsoup-3.0-0 \
+              libjson-glib-1.0-0 libwebkitgtk-6.0-4 libcmark-gfm0 \
+              libcmark-gfm-extensions0 libjs-katex fonts-katex
+            ```
+          files: llm-studio-linux-x86_64.tar.gz
+          generate_release_notes: true
