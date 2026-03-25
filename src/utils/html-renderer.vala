@@ -16,6 +16,23 @@ namespace LLMStudio {
             return llm_cmark_to_html (md);
         }
 
+        /* Render a tool result as an HTML fragment.  Screenshot results (prefixed
+           with ToolManager.SCREENSHOT_PREFIX) are rendered as an <img> element;
+           everything else is plain-text escaped.                                */
+        public static string render_tool_result_html (string result) {
+            if (result.has_prefix (ToolManager.SCREENSHOT_PREFIX)) {
+                string data_uri = result[ToolManager.SCREENSHOT_PREFIX.length:];
+                return "<img src=\"" + html_esc (data_uri) +
+                       "\" style=\"max-width:100%;border-radius:4px;margin-top:4px\">";
+            }
+            return html_esc (result);
+        }
+
+        /* Returns true when a tool result should be injected as HTML in the UI. */
+        public static bool tool_result_is_html (string result) {
+            return result.has_prefix (ToolManager.SCREENSHOT_PREFIX);
+        }
+
         /* Escape a string for safe embedding as a JavaScript double-quoted
            string literal.  Also escapes < > to avoid XSS via innerHTML.
            Uses a StringBuilder loop to avoid GLib.Regex (which throws on
@@ -221,7 +238,7 @@ namespace LLMStudio {
                 sb.append ("<details class=\"tool-call\" open><summary>");
                 sb.append (html_esc (tc.display));
                 sb.append ("</summary><div class=\"tool-result\">");
-                sb.append (html_esc (tc.result));
+                sb.append (render_tool_result_html (tc.result));
                 sb.append ("</div></details>");
             }
             sb.append ("</div>");

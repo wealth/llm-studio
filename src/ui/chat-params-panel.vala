@@ -298,11 +298,42 @@ namespace LLMStudio.UI {
             dt_row.append (dt_sw);
             tools_content.append (dt_row);
 
+            var ss_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            ss_row.margin_top    = 4;
+            ss_row.margin_bottom = 2;
+            var ss_lbl = new Gtk.Label ("Desktop Screenshot");
+            ss_lbl.halign  = Gtk.Align.START;
+            ss_lbl.hexpand = true;
+            ss_lbl.add_css_class ("body");
+            var ss_sw = new Gtk.Switch ();
+            ss_sw.valign = Gtk.Align.CENTER;
+            ss_row.append (ss_lbl);
+            ss_row.append (ss_sw);
+            tools_content.append (ss_row);
+
             tool_manager.bind_property ("duckduckgo-enabled",    ddg_sw,   "active",
                 GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
             tool_manager.bind_property ("visit-website-enabled", visit_sw, "active",
                 GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
             tool_manager.bind_property ("datetime-enabled",      dt_sw,    "active",
+                GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
+            tool_manager.bind_property ("screenshot-enabled",    ss_sw,    "active",
+                GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
+
+            var inp_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
+            inp_row.margin_top    = 4;
+            inp_row.margin_bottom = 2;
+            var inp_lbl = new Gtk.Label ("Desktop Input");
+            inp_lbl.halign  = Gtk.Align.START;
+            inp_lbl.hexpand = true;
+            inp_lbl.add_css_class ("body");
+            var inp_sw = new Gtk.Switch ();
+            inp_sw.valign = Gtk.Align.CENTER;
+            inp_row.append (inp_lbl);
+            inp_row.append (inp_sw);
+            tools_content.append (inp_row);
+
+            tool_manager.bind_property ("input-desktop-enabled", inp_sw,   "active",
                 GLib.BindingFlags.BIDIRECTIONAL | GLib.BindingFlags.SYNC_CREATE);
 
             outer_box.append (make_collapsible_section ("Tools", tools_content, true));

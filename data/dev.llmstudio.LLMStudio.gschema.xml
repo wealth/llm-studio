@@ -81,6 +81,14 @@
       <default>false</default>
       <summary>Whether the Date/Time tool is enabled</summary>
     </key>
+    <key name="tool-screenshot-enabled" type="b">
+      <default>false</default>
+      <summary>Whether the Desktop Screenshot tool is enabled</summary>
+    </key>
+    <key name="tool-input-desktop-enabled" type="b">
+      <default>false</default>
+      <summary>Whether the Desktop Input tool is enabled (requires ydotool or xdotool)</summary>
+    </key>
 
     <!-- API Server -->
     <key name="api-server-enabled" type="b">

@@ -406,7 +406,8 @@ namespace LLMStudio.UI {
 
                 if (resp_raw == "" && !full_content.contains ("</think>")) {
                     /* Still inside think block(s) — show rendered text live. */
-                    string think_html = HtmlRenderer.render_markdown (think_raw);
+                    string think_html = HtmlRenderer.render_markdown (
+                        strip_tool_call_blocks (think_raw));
                     run_js (@"llmSetThink(\"$(streaming_id)\",\"$(j(think_html))\");");
                     return;
                 }
@@ -414,7 +415,8 @@ namespace LLMStudio.UI {
                 /* Think block(s) finished — update think once, then stream response. */
                 if (!think_complete) {
                     think_complete = true;
-                    string think_html = HtmlRenderer.render_markdown (think_raw);
+                    string think_html = HtmlRenderer.render_markdown (
+                        strip_tool_call_blocks (think_raw));
                     run_js (@"llmSetThink(\"$(streaming_id)\",\"$(j(think_html))\");");
                     /* Collapse and show duration */
                     last_think_duration = 0;
@@ -424,14 +426,16 @@ namespace LLMStudio.UI {
                     run_js (@"llmCollapseThink(\"$(streaming_id)\",\"$(j(duration))\");");
                 }
                 if (resp_raw != "") {
-                    string resp_html = HtmlRenderer.render_markdown (resp_raw);
+                    string resp_html = HtmlRenderer.render_markdown (
+                        strip_tool_call_blocks (resp_raw));
                     run_js (@"llmSetContent(\"$(streaming_id)\",\"$(j(resp_html))\");");
                 }
 
             } else {
                 /* No think block — render accumulated response as markdown. */
                 if (full_content != "") {
-                    string resp_html = HtmlRenderer.render_markdown (full_content);
+                    string resp_html = HtmlRenderer.render_markdown (
+                        strip_tool_call_blocks (full_content));
                     run_js (@"llmSetContent(\"$(streaming_id)\",\"$(j(resp_html))\");");
                 }
             }
@@ -444,8 +448,8 @@ namespace LLMStudio.UI {
             string think, resp;
             parse_think_resp (full_content, out think, out resp);
 
-            string think_html = think != "" ? HtmlRenderer.render_markdown (think) : "";
-            string resp_html  = resp  != "" ? HtmlRenderer.render_markdown (resp)  : "";
+            string think_html = think != "" ? HtmlRenderer.render_markdown (strip_tool_call_blocks (think)) : "";
+            string resp_html  = resp  != "" ? HtmlRenderer.render_markdown (strip_tool_call_blocks (resp))  : "";
 
             /* Ensure think is collapsed with duration before finalize (safety net) */
             if (think != "" && last_think_duration >= 0) {
@@ -819,8 +823,30 @@ namespace LLMStudio.UI {
                         tools
                     );
 
+                    /* Fallback: parse <tool_call> XML from text when the backend
+                       did not emit finish_reason=tool_calls via the API.
+                       Check the response body first; fall back to think block. */
+                    if (last_reason != "tool_calls" && tools != null) {
+                        string ft2, fr2;
+                        parse_think_resp (full_content, out ft2, out fr2);
+                        string? tc_json = parse_text_tool_calls (fr2);
+                        if (tc_json == null) tc_json = parse_text_tool_calls (ft2);
+                        if (tc_json != null) {
+                            backend_manager.active_backend.set_pending_tool_calls (tc_json);
+                            last_reason = "tool_calls";
+                        }
+                    }
+
                     /* Tool-call agentic loop: execute tools and continue */
                     if (last_reason == "tool_calls" && tool_iterations < 5) {
+                        /* Collapse think block NOW so it's tidy before tool results appear */
+                        string rt_pre, rr_pre;
+                        parse_think_resp (full_content, out rt_pre, out rr_pre);
+                        if (rt_pre != "" && last_think_duration >= 0) {
+                            string dur_pre = "Thought for %.1fs".printf (last_think_duration);
+                            run_js (@"llmCollapseThink(\"$(streaming_id)\",\"$(j(dur_pre))\");");
+                        }
+
                         if (yield execute_tool_calls (messages)) {
                             /* Save this round before starting the next */
                             var round = new ChatRound ();
@@ -833,11 +859,6 @@ namespace LLMStudio.UI {
                             msg_rounds.append (round);
 
                             tool_iterations++;
-                            /* Collapse think with duration before starting new round */
-                            if (rt != "" && last_think_duration >= 0) {
-                                string dur = "Thought for %.1fs".printf (last_think_duration);
-                                run_js (@"llmCollapseThink(\"$(streaming_id)\",\"$(j(dur))\");");
-                            }
                             run_js (@"llmNewRound(\"$(streaming_id)\");");
                             continue;
                         }
@@ -978,17 +999,53 @@ namespace LLMStudio.UI {
                     tc_record.result  = result;
                     _round_tool_calls.append (tc_record);
 
-                    /* Collapse the tool call into a details element */
-                    run_js (@"llmAddToolCall(\"$(streaming_id)\",\"$(j(display))\",\"$(j(result))\");");
+                    /* Collapse the tool call into a details element.
+                       Screenshot results carry a data URI prefix — pass
+                       them as raw HTML and let the JS render an <img>.  */
+                    bool result_is_html = HtmlRenderer.tool_result_is_html (result);
+                    string result_for_js = result_is_html
+                        ? HtmlRenderer.render_tool_result_html (result)
+                        : result;
+                    string is_html_js = result_is_html ? "true" : "false";
+                    run_js (@"llmAddToolCall(\"$(streaming_id)\",\"$(j(display))\",\"$(j(result_for_js))\",$(is_html_js));");
 
                     /* Reset resp to loading dots for the next model response */
                     run_js (@"llmSetContent(\"$(streaming_id)\",\"<span class=\\\"dot\\\"></span>\");");
 
-                    /* Add tool result message */
+                    /* Add tool result message.
+                       For screenshot results, build a multimodal content array so
+                       vision-capable backends receive the actual image.          */
                     var tool_o = new Json.Object ();
                     tool_o.set_string_member ("role",         "tool");
                     tool_o.set_string_member ("tool_call_id", tc_id);
-                    tool_o.set_string_member ("content",      result);
+                    if (result.has_prefix (ToolManager.SCREENSHOT_PREFIX)) {
+                        string data_uri = result[ToolManager.SCREENSHOT_PREFIX.length:];
+                        var content_arr = new Json.Array ();
+
+                        var text_o = new Json.Object ();
+                        text_o.set_string_member ("type", "text");
+                        text_o.set_string_member ("text", "Screenshot captured.");
+                        var text_n = new Json.Node (Json.NodeType.OBJECT);
+                        text_n.set_object (text_o);
+                        content_arr.add_element (text_n);
+
+                        var img_url_o = new Json.Object ();
+                        img_url_o.set_string_member ("url", data_uri);
+                        var img_url_n = new Json.Node (Json.NodeType.OBJECT);
+                        img_url_n.set_object (img_url_o);
+                        var img_o = new Json.Object ();
+                        img_o.set_string_member ("type", "image_url");
+                        img_o.set_member ("image_url", img_url_n);
+                        var img_n = new Json.Node (Json.NodeType.OBJECT);
+                        img_n.set_object (img_o);
+                        content_arr.add_element (img_n);
+
+                        var arr_n = new Json.Node (Json.NodeType.ARRAY);
+                        arr_n.set_array (content_arr);
+                        tool_o.set_member ("content", arr_n);
+                    } else {
+                        tool_o.set_string_member ("content", result);
+                    }
                     var tool_n = new Json.Node (Json.NodeType.OBJECT);
                     tool_n.set_object (tool_o);
                     messages.add_element (tool_n);
@@ -997,6 +1054,117 @@ namespace LLMStudio.UI {
             } catch (Error e) {
                 warning ("Tool call execution error: %s", e.message);
                 return false;
+            }
+        }
+
+        /* ── Text-based tool call fallback ──────────────────────────────
+           Some models embed tool calls as XML in their content or thinking
+           instead of using the OpenAI tool_calls API format.  These helpers
+           parse the raw text so the agentic loop can execute them.
+
+           Supported formats:
+             JSON:      <tool_call>{"name":"fn","arguments":{...}}</tool_call>
+             Attribute: <tool_call> <function=fn> <parameter=k> v … </tool_call>  */
+
+        /* Remove all complete <tool_call>…</tool_call> blocks from text
+           before display so raw XML never appears in the chat bubbles.  */
+        private static string strip_tool_call_blocks (string text) {
+            try {
+                var re = new GLib.Regex (
+                    "<tool_call>[\\s\\S]*?</tool_call>",
+                    GLib.RegexCompileFlags.CASELESS);
+                return re.replace (text, -1, 0, "").strip ();
+            } catch (Error e) {
+                return text;
+            }
+        }
+
+        /* Try to extract tool calls from freeform text.
+           Returns a JSON array string compatible with pending_tool_call_json,
+           or null if no parsable tool_call blocks are found.                */
+        private static string? parse_text_tool_calls (string content) {
+            try {
+                var re = new GLib.Regex (
+                    "<tool_call>([\\s\\S]*?)</tool_call>",
+                    GLib.RegexCompileFlags.CASELESS);
+                GLib.MatchInfo mi;
+                if (!re.match (content, 0, out mi) || !mi.matches ()) return null;
+
+                var tc_arr = new Json.Array ();
+                int id_ctr = 0;
+
+                while (mi.matches ()) {
+                    string inner = (mi.fetch (1) ?? "").strip ();
+                    string? tc_name = null;
+                    string? tc_args_json = null;
+
+                    /* JSON format: {"name": "fn", "arguments": {...}} */
+                    if (inner.has_prefix ("{")) {
+                        try {
+                            var p = new Json.Parser ();
+                            p.load_from_data (inner);
+                            var obj = p.get_root ().get_object ();
+                            tc_name = obj.has_member ("name")
+                                ? obj.get_string_member ("name") : null;
+                            if (tc_name != null && obj.has_member ("arguments")) {
+                                var arg = obj.get_member ("arguments");
+                                if (arg.get_node_type () == Json.NodeType.OBJECT) {
+                                    var gen = new Json.Generator ();
+                                    gen.set_root (arg);
+                                    tc_args_json = gen.to_data (null);
+                                } else if (arg.get_node_type () == Json.NodeType.VALUE) {
+                                    tc_args_json = arg.get_string ();
+                                }
+                            }
+                            if (tc_name != null && tc_args_json == null) tc_args_json = "{}";
+                        } catch (Error e) {}
+                    }
+
+                    /* Attribute format: <function=NAME> <parameter=K> V … */
+                    if (tc_name == null) {
+                        var fn_re = new GLib.Regex ("<function=(\\w+)>");
+                        GLib.MatchInfo fn_mi;
+                        if (fn_re.match (inner, 0, out fn_mi) && fn_mi.matches ()) {
+                            tc_name = fn_mi.fetch (1) ?? "";
+                            var args_o = new Json.Object ();
+                            var par_re = new GLib.Regex ("<parameter=(\\w+)>\\s*([^<]*)");
+                            GLib.MatchInfo pm;
+                            if (par_re.match (inner, 0, out pm)) {
+                                while (pm.matches ()) {
+                                    string k = (pm.fetch (1) ?? "").strip ();
+                                    string v = (pm.fetch (2) ?? "").strip ();
+                                    if (k != "") args_o.set_string_member (k, v);
+                                    pm.next ();
+                                }
+                            }
+                            var args_node = new Json.Node (Json.NodeType.OBJECT);
+                            args_node.set_object (args_o);
+                            var gen = new Json.Generator ();
+                            gen.set_root (args_node);
+                            tc_args_json = gen.to_data (null);
+                        }
+                    }
+
+                    if (tc_name != null && tc_name != "" && tc_args_json != null) {
+                        var o = new Json.Object ();
+                        o.set_string_member ("id",        "tc_%d".printf (id_ctr++));
+                        o.set_string_member ("name",      tc_name);
+                        o.set_string_member ("arguments", tc_args_json);
+                        var n = new Json.Node (Json.NodeType.OBJECT);
+                        n.set_object (o);
+                        tc_arr.add_element (n);
+                    }
+                    mi.next ();
+                }
+
+                if (tc_arr.get_length () == 0) return null;
+                var gen = new Json.Generator ();
+                var root = new Json.Node (Json.NodeType.ARRAY);
+                root.set_array (tc_arr);
+                gen.set_root (root);
+                return gen.to_data (null);
+            } catch (Error e) {
+                return null;
             }
         }
 

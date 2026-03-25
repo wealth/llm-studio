@@ -77,6 +77,12 @@ namespace LLMStudio {
         protected string? _pending_tool_call_json = null;
         public string? pending_tool_call_json { get { return _pending_tool_call_json; } }
 
+        /* Allow chat-view to inject text-parsed tool calls when the backend
+           did not emit finish_reason=tool_calls via the API.               */
+        public void set_pending_tool_calls (string json) {
+            _pending_tool_call_json = json;
+        }
+
         public signal void status_changed (BackendStatus status);
         public signal void log_message    (string line, bool is_error);
         public signal void model_loaded   (ModelInfo model);

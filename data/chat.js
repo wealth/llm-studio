@@ -171,13 +171,13 @@ function llmSetContent(id,html){
   katexEl(resp);
   scrollBottom();
 }
-function llmAddToolCall(id,display,result){
+function llmAddToolCall(id,display,result,resultIsHtml){
   var tools=document.getElementById('asst-'+_rid(id)+'-tools');
   if(!tools)return;
   var tc=document.createElement('details');
   tc.className='tool-call';
   tc.innerHTML='<summary>'+escHtml(display)+'</summary>'+
-               '<div class="tool-result">'+escHtml(result)+'</div>';
+               '<div class="tool-result">'+(resultIsHtml?result:escHtml(result))+'</div>';
   tc.open=true;
   tools.appendChild(tc);
   katexEl(tc);
